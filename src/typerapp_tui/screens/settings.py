@@ -17,8 +17,10 @@ from textual.containers import VerticalScroll
 from textual.screen import Screen
 from textual.widgets import Footer, Label, ListItem, ListView, Static
 
+from typerapp_core.controller import season_for
 from typerapp_core.models import ScoringRules
-from typerapp_tui.screens.dialogs import Confirm, NamePrompt
+from typerapp_core.providers.api import COMPETITIONS
+from typerapp_tui.screens.dialogs import Confirm, LeaguePicker, NamePrompt
 from typerapp_tui.widgets.setting_row import SettingRow
 
 if TYPE_CHECKING:
@@ -52,6 +54,7 @@ class SettingsScreen(Screen[None]):
         Binding("escape", "back", "Menu"),
         Binding("a", "add_player", "Dodaj gracza"),
         Binding("u", "delete_player", "Usuń gracza"),
+        Binding("l", "pick_league", "Liga"),
         Binding("r", "restore_defaults", "Domyślne"),
     ]
 
@@ -73,10 +76,12 @@ class SettingsScreen(Screen[None]):
             yield from self._fields(JOKER, rules)
             yield Static("TYPOWANIE", classes="section")
             yield from self._fields(DEADLINE, rules)
+            yield Static("ŹRÓDŁO WYNIKÓW", classes="section")
+            yield Static(id="settings-source")
             yield Static("GRACZE", classes="section")
             yield ListView(id="settings-players")
         yield Static(
-            "↑↓ opcja · +− lub ←→ zmień · 0-9 wpisz · A dodaj gracza · U usuń · R domyślne",
+            "↑↓ opcja · +− lub ←→ zmień · 0-9 wpisz · L liga · A dodaj gracza · U usuń",
             id="hints",
         )
         yield Footer()
@@ -95,9 +100,22 @@ class SettingsScreen(Screen[None]):
 
     async def on_mount(self) -> None:
         await self._reload_players()
+        self._refresh_source()
         rows = list(self.query(SettingRow))
         if rows:
             rows[0].focus()
+
+    def _refresh_source(self) -> None:
+        controller = self.controller
+        league = controller.league()
+        where = f"{league[0]} {league[1]}" if league else "nie wybrano ligi"
+        provider = controller.provider
+        source = provider.name if getattr(provider, "online", False) else "ręcznie wpisywane"
+        last = controller.last_sync()
+        when = f"ostatnio {last.astimezone():%d.%m %H:%M}" if last else "jeszcze nie pobierano"
+        self.query_one("#settings-source", Static).update(
+            f"liga [b]{escape(where)}[/b]   źródło [b]{escape(source)}[/b]   [dim]{when}[/dim]"
+        )
 
     # ----------------------------------------------------------------- updates
 
@@ -172,6 +190,22 @@ class SettingsScreen(Screen[None]):
         if item is None or not item.id:
             return None
         return int(item.id.removeprefix("settings-player-"))
+
+    def action_pick_league(self) -> None:
+        league = self.controller.league()
+        self.app.push_screen(
+            LeaguePicker(COMPETITIONS, league[0] if league else None),
+            self._picked_league,
+        )
+
+    def _picked_league(self, name: str | None) -> None:
+        if not name:
+            return
+        controller = self.controller
+        controller.set_league(name, season_for(controller.now()))
+        self._refresh_source()
+        self.notify(f"Liga: {escape(name)}")
+        cast("TyperApp", self.app).sync_now()
 
     def action_restore_defaults(self) -> None:
         self.app.push_screen(

@@ -29,8 +29,19 @@ uv sync                           # install dependencies
 uv run python -m typerapp_tui      # terminal version
 ```
 
-API key: copy `.env.example` to `.env` and paste your football-data.org key.
-Without a key the app works offline (cached data, manually entered results, demo mode).
+## Results
+
+Copy `.env.example` to `.env` and paste a [football-data.org](https://www.football-data.org/)
+key into it. The free plan covers a dozen competitions (Premier League, Bundesliga, La Liga,
+Serie A and so on) and allows about ten requests a minute, so the app fetches one matchday at
+a time and caches everything in SQLite.
+
+- `S` fetches the current and the previous matchday; the app also does it on start-up when
+  the cache is older than five minutes.
+- `W` types a result in by hand, which is how the app works with no key and no network.
+- `L` in the settings picks the league.
+
+Without a key the app still runs: cached data, manually entered results and the demo seed.
 
 ## Development
 

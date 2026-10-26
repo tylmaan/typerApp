@@ -16,9 +16,12 @@ from textual.widgets import Label, ListItem, ListView
 from typerapp_core.controller import TyperController
 from typerapp_core.demo import OPEN_MATCHDAY, PLAYED_MATCHDAY, seed_demo_data
 from typerapp_core.events import EventBus
-from typerapp_core.models import Score, ScoringRules
+from typerapp_core.models import MatchStatus, Score, ScoringRules
+from typerapp_core.providers.api import COMPETITIONS
+from typerapp_core.providers.base import ProviderUnavailable
 from typerapp_core.repository import Repository
 from typerapp_tui.app import TyperApp
+from typerapp_tui.screens.dialogs import ResultPrompt, parse_result
 from typerapp_tui.screens.main_menu import MainMenuScreen
 from typerapp_tui.screens.matchday import MatchdayScreen
 from typerapp_tui.screens.profile import ProfileScreen
@@ -27,6 +30,8 @@ from typerapp_tui.screens.settings import SettingsScreen
 from typerapp_tui.widgets.match_row import MatchRow
 from typerapp_tui.widgets.ranking_row import RankingRow
 from typerapp_tui.widgets.setting_row import SettingRow
+
+from helpers import FakeProvider, fetched
 
 
 @pytest.fixture(autouse=True)
@@ -37,11 +42,11 @@ def no_swallowed_errors(caplog: pytest.LogCaptureFixture):
     assert not broken, broken[0].getMessage()
 
 
-def build(*, demo: bool = True) -> tuple[Repository, TyperApp]:
+def build(*, demo: bool = True, provider=None) -> tuple[Repository, TyperApp]:
     repository = Repository()
     if demo:
         seed_demo_data(repository)
-    controller = TyperController(repository, EventBus())
+    controller = TyperController(repository, EventBus(), provider=provider)
     return repository, TyperApp(controller)
 
 
@@ -562,6 +567,218 @@ def test_a_player_can_be_deleted_after_confirmation() -> None:
             names = [player.name for player in app.controller.players()]
             assert doomed not in names
             assert len(names) == 4
+        repository.close()
+
+    run(scenario)
+
+
+# ------------------------------------------------------------ results and sync
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("2:1", Score(2, 1)),
+        (" 2 : 1 ", Score(2, 1)),
+        ("2-1", Score(2, 1)),
+        ("2 1", Score(2, 1)),
+        ("10:0", Score(10, 0)),
+        ("", None),
+        ("2:", None),
+        ("dwa:jeden", None),
+        ("2:1:1", None),
+    ],
+)
+def test_result_is_parsed_the_way_people_type_it(text: str, expected: Score | None) -> None:
+    assert parse_result(text) == expected
+
+
+def test_a_result_can_be_typed_in_by_hand() -> None:
+    async def scenario() -> None:
+        repository, app = build()
+        async with app.run_test() as pilot:
+            await pilot.press("enter")
+            await pilot.pause()
+            row = app.screen.focused
+            assert isinstance(row, MatchRow)
+            match_id = row.match_id
+
+            await pilot.press("w")
+            await pilot.pause()
+            await pilot.press("3", ":", "0", "enter")
+            await pilot.pause()
+
+            stored = repository.match(match_id)
+            assert stored is not None and stored.score == Score(3, 0)
+            assert stored.is_settled
+        repository.close()
+
+    run(scenario)
+
+
+def test_a_typed_result_awards_points_and_shows_them() -> None:
+    async def scenario() -> None:
+        repository, app = build()
+        async with app.run_test() as pilot:
+            await pilot.press("enter")
+            await pilot.pause()
+            row = app.screen.focused
+            assert isinstance(row, MatchRow)
+            match_id = row.match_id
+            await pilot.press("2", "1")  # Kuba types 2:1
+            await pilot.pause()
+
+            await pilot.press("w")
+            await pilot.pause()
+            await pilot.press("2", ":", "1", "enter")
+            await pilot.pause()
+
+            assert app.controller.ranking()[0].points > 0
+            updated = next(r for r in app.screen.query(MatchRow) if r.match_id == match_id)
+            assert updated.points == 7  # exact score plus both bonuses
+            assert not updated.editable  # a settled match cannot be predicted any more
+        repository.close()
+
+    run(scenario)
+
+
+def test_nonsense_in_the_result_dialog_is_refused() -> None:
+    async def scenario() -> None:
+        repository, app = build()
+        async with app.run_test() as pilot:
+            await pilot.press("enter")
+            await pilot.pause()
+            row = app.screen.focused
+            assert isinstance(row, MatchRow)
+
+            await pilot.press("w")
+            await pilot.pause()
+            await pilot.press("x", "enter")
+            await pilot.pause()
+
+            assert repository.match(row.match_id).score is None  # type: ignore[union-attr]
+            assert isinstance(app.screen, ResultPrompt)  # the dialog stays open
+        repository.close()
+
+    run(scenario)
+
+
+def test_without_a_source_syncing_only_explains_itself() -> None:
+    async def scenario() -> None:
+        repository, app = build()
+        async with app.run_test() as pilot:
+            assert not app.controller.can_sync()
+
+            await pilot.press("s")
+            await pilot.pause()
+
+            assert app.controller.last_sync() is None
+        repository.close()
+
+    run(scenario)
+
+
+def test_pressing_s_fetches_and_rebuilds_the_matchday() -> None:
+    async def scenario() -> None:
+        provider = FakeProvider(current=13)  # nothing to deliver on start-up
+        repository, app = build(provider=provider)
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete()  # the app syncs once on start
+            await pilot.press("enter")  # the open matchday
+            await pilot.pause()
+            before = len(app.screen.query(MatchRow))
+
+            provider.matches = {
+                13: [
+                    fetched("Chelsea", "Liverpool", external_id="demo-2-0"),  # already known
+                    fetched("Leeds", "Burnley", external_id="new-1"),  # brand new
+                ]
+            }
+            provider.asked.clear()
+            await pilot.press("s")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            assert provider.asked == [12, 13]
+            assert app.controller.last_sync() is not None
+            assert len(app.screen.query(MatchRow)) == before + 1
+        repository.close()
+
+    run(scenario)
+
+
+def test_a_result_from_the_sync_lands_on_the_screen() -> None:
+    async def scenario() -> None:
+        provider = FakeProvider(current=13)
+        repository, app = build(provider=provider)
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete()
+            await pilot.press("enter")
+            await pilot.pause()
+            row = app.screen.focused
+            assert isinstance(row, MatchRow)
+            await pilot.press("2", "1")
+            await pilot.pause()
+            match = repository.match(row.match_id)
+            assert match is not None
+
+            provider.matches = {
+                13: [
+                    fetched(
+                        match.home_team,
+                        match.away_team,
+                        status=MatchStatus.FINISHED,
+                        score=Score(2, 1),
+                        external_id=match.external_id or "x",
+                        kickoff=match.kickoff,
+                    )
+                ]
+            }
+            await pilot.press("s")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            assert repository.match(row.match_id).score == Score(2, 1)  # type: ignore[union-attr]
+            assert app.controller.ranking()[0].points > 0
+        repository.close()
+
+    run(scenario)
+
+
+def test_a_failing_source_does_not_break_the_screen() -> None:
+    async def scenario() -> None:
+        provider = FakeProvider(error=ProviderUnavailable("brak sieci"))
+        repository, app = build(provider=provider)
+        async with app.run_test() as pilot:
+            await pilot.press("s")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            assert app.controller.last_sync() is None
+            assert isinstance(app.screen, MainMenuScreen)
+        repository.close()
+
+    run(scenario)
+
+
+def test_league_can_be_picked_in_the_settings() -> None:
+    async def scenario() -> None:
+        provider = FakeProvider(current=None)
+        repository, app = build(provider=provider)
+        async with app.run_test() as pilot:
+            await pilot.press("down", "down", "down", "enter")  # settings
+            await pilot.pause()
+
+            await pilot.press("l")
+            await pilot.pause()
+            await pilot.press("down", "enter")  # the second competition on the list
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            league = app.controller.league()
+            assert league is not None
+            assert league[0] == COMPETITIONS[1][1]
+            assert "/" in league[1]  # the season, written 2026/27
         repository.close()
 
     run(scenario)

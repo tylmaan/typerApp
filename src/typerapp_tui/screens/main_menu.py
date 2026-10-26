@@ -39,6 +39,7 @@ class MainMenuScreen(Screen[None]):
         Binding("left", "previous_player", "Poprzedni gracz", show=False),
         Binding("right", "next_player", "Następny gracz", show=False),
         Binding("p", "pick_player", "Gracz"),
+        Binding("s", "sync", "Pobierz wyniki"),
         Binding("q", "quit", "Wyjście"),
     ]
 
@@ -216,6 +217,9 @@ class MainMenuScreen(Screen[None]):
 
     def action_previous_player(self) -> None:
         self.controller.switch_player(-1)
+
+    def action_sync(self) -> None:
+        cast("TyperApp", self.app).sync_now()
 
     def action_pick_player(self) -> None:
         players = self.controller.players()

@@ -6,6 +6,7 @@ When the controller confirms a save, the event comes back and exactly one row is
 
 from __future__ import annotations
 
+from functools import partial
 from typing import TYPE_CHECKING, cast
 
 from rich.markup import escape
@@ -15,11 +16,16 @@ from textual.containers import VerticalScroll
 from textual.screen import Screen
 from textual.widgets import Footer, Static
 
-from typerapp_core.events import ActivePlayerChanged, PredictionSaved, ResultsUpdated
-from typerapp_core.models import MatchStatus
+from typerapp_core.events import (
+    ActivePlayerChanged,
+    MatchesUpdated,
+    PredictionSaved,
+    ResultsUpdated,
+)
+from typerapp_core.models import MatchStatus, Score
 from typerapp_core.scoring import JokerLimitError, PredictionClosedError, PredictionError
 from typerapp_tui.formatting import format_countdown, plural_matches
-from typerapp_tui.screens.dialogs import PlayerPicker
+from typerapp_tui.screens.dialogs import PlayerPicker, ResultPrompt
 from typerapp_tui.widgets.match_row import MatchRow
 
 if TYPE_CHECKING:
@@ -31,6 +37,8 @@ class MatchdayScreen(Screen[None]):
     BINDINGS = [
         Binding("escape", "back", "Menu"),
         Binding("j", "joker", "Joker"),
+        Binding("w", "enter_result", "Wpisz wynik"),
+        Binding("s", "sync", "Pobierz wyniki"),
         Binding("p", "pick_player", "Gracz"),
         Binding("down", "next_match", "Następny mecz", show=False),
         Binding("up", "previous_match", "Poprzedni mecz", show=False),
@@ -94,7 +102,8 @@ class MatchdayScreen(Screen[None]):
         self._cancels = [
             bridge.subscribe(PredictionSaved, self._on_prediction_saved),
             bridge.subscribe(ActivePlayerChanged, lambda _: self._reload_predictions()),
-            bridge.subscribe(ResultsUpdated, lambda _: self._reload_predictions()),
+            bridge.subscribe(ResultsUpdated, lambda _: self._rebuild_rows()),
+            bridge.subscribe(MatchesUpdated, self._on_matches_updated),
         ]
         self.set_interval(1.0, self._refresh_countdown)
         self._refresh_title()
@@ -150,6 +159,23 @@ class MatchdayScreen(Screen[None]):
         self._refresh_title()
         self._refresh_summary()
 
+    def _on_matches_updated(self, event: MatchesUpdated) -> None:
+        if event.matchday_id == self.matchday_id:
+            self._rebuild_rows()
+
+    def _rebuild_rows(self) -> None:
+        """A sync can add matches, move kickoffs or settle games, so the rows are rebuilt."""
+        self.run_worker(self._mount_rows(), exclusive=True, group="rows")
+
+    async def _mount_rows(self) -> None:
+        container = self.query_one("#matches", VerticalScroll)
+        await container.remove_children()
+        await container.mount_all(self._rows())
+        self._refresh_title()
+        self._refresh_countdown()
+        self._refresh_summary()
+        self._focus_first_gap()
+
     def _on_prediction_saved(self, event: PredictionSaved) -> None:
         saved = event.prediction
         if saved.player_id != self.player_id:
@@ -189,6 +215,22 @@ class MatchdayScreen(Screen[None]):
             self.controller.toggle_joker(row.match_id)
         except PredictionError as error:
             self.notify(_explain(error), severity="warning")
+
+    def action_enter_result(self) -> None:
+        """Type in the real result, which is also how the app works without internet."""
+        row = self.focused
+        if not isinstance(row, MatchRow):
+            return
+        self.app.push_screen(ResultPrompt(row.match), partial(self._save_result, row.match_id))
+
+    def _save_result(self, match_id: int, score: Score | None) -> None:
+        if score is None:
+            return
+        self.controller.enter_result(match_id, score)
+        self.notify(f"Zapisano wynik {score}")
+
+    def action_sync(self) -> None:
+        cast("TyperApp", self.app).sync_now()
 
     def action_next_match(self) -> None:
         self._move_focus(1)

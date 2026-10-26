@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import re
+from collections.abc import Sequence
+
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label, ListItem, ListView
 
-from typerapp_core.models import Player
+from typerapp_core.models import Match, Player, Score
 
 
 class PlayerPicker(ModalScreen[int | None]):
@@ -52,6 +55,48 @@ class PlayerPicker(ModalScreen[int | None]):
         self.dismiss(None)
 
 
+class LeaguePicker(ModalScreen[str | None]):
+    """The competitions the free API plan covers. Returns the chosen league's name."""
+
+    BINDINGS = [Binding("escape", "cancel", "Anuluj")]
+
+    def __init__(self, competitions: Sequence[tuple[str, str]], current: str | None = None) -> None:
+        super().__init__()
+        self._competitions = list(competitions)
+        self._current = current
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Label("Którą ligę typujemy?", classes="dialog-title")
+            yield ListView(
+                *[
+                    ListItem(
+                        Label(f"{'▸ ' if name == self._current else '  '}{name}  [{code}]"),
+                        id=f"league-{code}",
+                    )
+                    for code, name in self._competitions
+                ],
+                id="league-list",
+            )
+            yield Label("↑↓ wybór · Enter zmień · Esc anuluj", classes="dialog-hint")
+
+    def on_mount(self) -> None:
+        listing = self.query_one("#league-list", ListView)
+        listing.focus()
+        listing.index = next(
+            (index for index, (_, name) in enumerate(self._competitions) if name == self._current),
+            0,
+        )
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        code = (event.item.id or "").removeprefix("league-")
+        name = next((n for c, n in self._competitions if c == code), None)
+        self.dismiss(name)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class Confirm(ModalScreen[bool]):
     """Asked before anything that cannot be undone, such as deleting a player."""
 
@@ -77,6 +122,47 @@ class Confirm(ModalScreen[bool]):
 
     def action_cancel(self) -> None:
         self.dismiss(False)
+
+
+class ResultPrompt(ModalScreen[Score | None]):
+    """Typing in a real result by hand: the fallback when the API has nothing."""
+
+    BINDINGS = [Binding("escape", "cancel", "Anuluj")]
+
+    def __init__(self, match: Match) -> None:
+        super().__init__()
+        self._match = match
+
+    def compose(self) -> ComposeResult:
+        current = str(self._match.score) if self._match.score else ""
+        with Vertical(id="dialog"):
+            yield Label(
+                f"Wynik: {self._match.home_team} – {self._match.away_team}",
+                classes="dialog-title",
+            )
+            yield Input(value=current, placeholder="np. 2:1", id="result")
+            yield Label("Enter zapisz · Esc anuluj", classes="dialog-hint")
+
+    def on_mount(self) -> None:
+        self.query_one("#result", Input).focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        score = parse_result(event.value)
+        if score is None:
+            self.notify("Wpisz wynik w formacie 2:1", severity="warning")
+            return
+        self.dismiss(score)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+def parse_result(text: str) -> Score | None:
+    """``2:1``, ``2-1`` and ``2 1`` all mean the same thing."""
+    match = re.fullmatch(r"\s*(\d{1,2})\s*[:\-\s]\s*(\d{1,2})\s*", text)
+    if match is None:
+        return None
+    return Score(int(match.group(1)), int(match.group(2)))
 
 
 class NamePrompt(ModalScreen[str | None]):
