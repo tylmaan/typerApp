@@ -104,6 +104,12 @@ def test_sweep_lost_on_a_single_miss(rules: ScoringRules) -> None:
     assert not sweep_awarded(predictions, matches, rules)
 
 
+def test_sweep_waits_for_the_whole_matchday(rules: ScoringRules) -> None:
+    # One match still to be played: the bonus must not be handed out and taken back later.
+    matches = [finished(1, 2, 1), make_match(2)]
+    assert not sweep_awarded([predict(2, 1, match_id=1)], matches, rules)
+
+
 def test_sweep_requires_a_prediction_for_every_match(rules: ScoringRules) -> None:
     matches = [finished(1, 2, 1), finished(2, 0, 0)]
     assert not sweep_awarded([predict(2, 1, match_id=1)], matches, rules)

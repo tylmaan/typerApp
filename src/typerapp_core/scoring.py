@@ -109,13 +109,20 @@ def sweep_awarded(
     matches: Iterable[Match],
     rules: ScoringRules,
 ) -> bool:
-    """True when the player got the outcome right in every settled match of a matchday.
+    """True when the player got the outcome right in every match of a finished matchday.
+
+    The bonus is only decided once the matchday is over: as long as one match is still to be
+    played the answer is ``False``, so the leaderboard does not hand out five points after
+    the first result and take them back later.
 
     Void matches (postponed, cancelled) are skipped, so a matchday that falls apart does not
     block the bonus. At least one settled match is required, and every one of them must have
     been predicted.
     """
     if not rules.matchday_sweep:
+        return False
+    matches = list(matches)
+    if any(not match.is_settled and not match.is_void for match in matches):
         return False
     settled = [match for match in matches if match.is_settled]
     if not settled:

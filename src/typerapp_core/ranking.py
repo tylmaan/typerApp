@@ -62,8 +62,10 @@ def build_ranking(
     ]
     settled = {match.id: match for match in relevant if match.is_settled}
 
+    # Every match of the matchday, not only the settled ones: the sweep bonus has to know
+    # whether anything is still to be played.
     groups: dict[int, _MatchdayGroup] = defaultdict(_MatchdayGroup)
-    for match in settled.values():
+    for match in relevant:
         groups[match.matchday_id].matches.append(match)
 
     for prediction in predictions:
