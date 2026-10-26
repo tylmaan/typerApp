@@ -117,7 +117,7 @@ def test_sync_asks_for_the_previous_matchday_too(
 
     controller.sync()
 
-    assert provider.asked == [11, 12]
+    assert provider.asked == [11, 12, 13]
 
 
 def test_the_source_decides_which_matchday_to_fetch(
@@ -132,9 +132,9 @@ def test_the_source_decides_which_matchday_to_fetch(
 
     controller.sync()
 
-    assert provider.asked == [7, 8]
+    assert provider.asked == [7, 8, 9]
     numbers = [day.number for day in controller.matchdays()]
-    assert numbers == [7, 8]  # the demo lives under its own league name
+    assert numbers == [8]  # only the matchday the source had fixtures for
 
 
 def test_demo_data_cannot_collide_with_fetched_fixtures(
@@ -158,7 +158,7 @@ def test_first_matchday_has_no_predecessor(repo: Repository, bus: EventBus, cloc
 
     controller.sync()
 
-    assert provider.asked == [1]
+    assert provider.asked == [1, 2]
 
 
 def test_nothing_to_sync_without_a_current_matchday(
@@ -283,7 +283,7 @@ def test_staleness_decides_the_sync_on_start(repo: Repository, bus: EventBus, cl
     assert controller.should_sync()
 
     assert controller.sync(force=False) == 0  # nothing new, but it did ask
-    assert provider.asked == [11, 12, 11, 12]
+    assert provider.asked == [11, 12, 13, 11, 12, 13]
 
 
 def test_a_broken_timestamp_is_ignored(repo: Repository, bus: EventBus, clock: Clock) -> None:
@@ -292,3 +292,17 @@ def test_a_broken_timestamp_is_ignored(repo: Repository, bus: EventBus, clock: C
 
     assert controller.last_sync() is None
     assert controller.should_sync()
+
+
+def test_a_matchday_without_fixtures_is_not_created(
+    repo: Repository, bus: EventBus, clock: Clock
+) -> None:
+    # Asking for the matchday after the last one of the season answers with nothing, and an
+    # empty matchday would then show up in the ranking and the profile.
+    provider = FakeProvider({12: [fetched()]}, current=12)
+    controller = make_controller(repo, bus, clock, provider)
+
+    controller.sync()
+
+    assert provider.asked == [11, 12, 13]
+    assert [day.number for day in controller.matchdays()] == [12]

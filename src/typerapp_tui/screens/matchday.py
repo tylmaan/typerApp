@@ -40,6 +40,10 @@ class MatchdayScreen(Screen[None]):
         Binding("w", "enter_result", "Wpisz wynik"),
         Binding("s", "sync", "Pobierz wyniki"),
         Binding("p", "pick_player", "Gracz"),
+        Binding("shift+right", "next_matchday", "Następna kolejka"),
+        Binding("shift+left", "previous_matchday", "Poprzednia kolejka", show=False),
+        Binding("]", "next_matchday", "Następna kolejka", show=False),
+        Binding("[", "previous_matchday", "Poprzednia kolejka", show=False),
         Binding("down", "next_match", "Następny mecz", show=False),
         Binding("up", "previous_match", "Poprzedni mecz", show=False),
     ]
@@ -50,6 +54,8 @@ class MatchdayScreen(Screen[None]):
         #: Set when the screen shows somebody else's predictions, opened from a profile.
         self._viewed_player_id = player_id
         self._cancels: list = []
+        #: Every matchday of the league, so the player can walk through them.
+        self._matchdays: list = []
 
     @property
     def controller(self) -> TyperController:
@@ -76,7 +82,10 @@ class MatchdayScreen(Screen[None]):
         with VerticalScroll(id="matches"):
             yield from self._rows()
         yield Static(id="matchday-summary")
-        yield Static("↑↓ mecz · ←→ pole · 0-9 wynik · +/− zmień o jeden", id="hints")
+        yield Static(
+            "⇧←→ lub [ ] kolejka · ↑↓ mecz · ←→ pole · 0-9 wynik · +/− zmień o jeden",
+            id="hints",
+        )
         yield Footer()
 
     def _rows(self) -> list[MatchRow]:
@@ -98,6 +107,7 @@ class MatchdayScreen(Screen[None]):
         return rows
 
     def on_mount(self) -> None:
+        self._matchdays = self.controller.matchdays()
         bridge = cast("TyperApp", self.app).bridge
         self._cancels = [
             bridge.subscribe(PredictionSaved, self._on_prediction_saved),
@@ -125,8 +135,12 @@ class MatchdayScreen(Screen[None]):
         number = matchday.number if matchday else "?"
         who = escape(player.name) if player else "brak gracza"
         label = "typy" if self.is_own_matchday else "typy gracza"
+        where = ""
+        numbers = [day.number for day in self._matchdays]
+        if matchday is not None and matchday.number in numbers:
+            where = f" · {numbers.index(matchday.number) + 1}/{len(numbers)}"
         self.query_one("#matchday-title", Static).update(
-            f"[b]Kolejka {number}[/b]   [dim]{label}[/dim] [b]{who}[/b]"
+            f"[b]Kolejka {number}[/b]   [dim]{label}[/dim] [b]{who}[/b][dim]{where}[/dim]"
         )
 
     def _refresh_countdown(self) -> None:
@@ -231,6 +245,22 @@ class MatchdayScreen(Screen[None]):
 
     def action_sync(self) -> None:
         cast("TyperApp", self.app).sync_now()
+
+    def action_next_matchday(self) -> None:
+        self._switch_matchday(1)
+
+    def action_previous_matchday(self) -> None:
+        self._switch_matchday(-1)
+
+    def _switch_matchday(self, step: int) -> None:
+        """Walk through the matchdays of the league without going back to the menu."""
+        if len(self._matchdays) < 2:
+            self.notify("To jedyna kolejka w tej lidze", severity="information")
+            return
+        ids = [day.id for day in self._matchdays]
+        current = ids.index(self.matchday_id) if self.matchday_id in ids else 0
+        self.matchday_id = ids[(current + step) % len(ids)]
+        self._rebuild_rows()
 
     def action_next_match(self) -> None:
         self._move_focus(1)

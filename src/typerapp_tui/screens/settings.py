@@ -18,6 +18,8 @@ from textual.screen import Screen
 from textual.widgets import Footer, Label, ListItem, ListView, Static
 
 from typerapp_core.controller import season_for
+from typerapp_core.demo import LEAGUE as DEMO_LEAGUE
+from typerapp_core.demo import PLAYER_NAMES as DEMO_PLAYERS
 from typerapp_core.models import ScoringRules
 from typerapp_core.providers.api import COMPETITIONS
 from typerapp_tui.screens.dialogs import Confirm, LeaguePicker, NamePrompt
@@ -55,12 +57,14 @@ class SettingsScreen(Screen[None]):
         Binding("a", "add_player", "Dodaj gracza"),
         Binding("u", "delete_player", "Usuń gracza"),
         Binding("l", "pick_league", "Liga"),
+        Binding("d", "remove_demo", "Usuń demo"),
         Binding("r", "restore_defaults", "Domyślne"),
     ]
 
     def __init__(self) -> None:
         super().__init__()
         self._cancels: list = []
+        self._options: list[tuple[str, str, str]] = []
 
     @property
     def controller(self) -> TyperController:
@@ -81,7 +85,8 @@ class SettingsScreen(Screen[None]):
             yield Static("GRACZE", classes="section")
             yield ListView(id="settings-players")
         yield Static(
-            "↑↓ opcja · +− lub ←→ zmień · 0-9 wpisz · L liga · A dodaj gracza · U usuń",
+            "↑↓ opcja · +− lub ←→ zmień · 0-9 wpisz · L liga · A dodaj gracza"
+            " · U usuń gracza · D usuń demo · R domyślne",
             id="hints",
         )
         yield Footer()
@@ -191,21 +196,74 @@ class SettingsScreen(Screen[None]):
             return None
         return int(item.id.removeprefix("settings-player-"))
 
+    def _league_options(self) -> list[tuple[str, str, str]]:
+        """``(key, label, season)``: leagues already in the database, then the free plan.
+
+        Without the stored ones there would be no way back to the demo league, or to a
+        league fetched earlier, once something else was chosen.
+        """
+        controller = self.controller
+        season = season_for(controller.now())
+        options: list[tuple[str, str, str]] = []
+        seen: set[str] = set()
+        for league, stored_season in controller.known_leagues():
+            options.append(
+                (
+                    f"{league}|{stored_season}",
+                    f"{escape(league)}  [dim]{stored_season}[/dim]",
+                    stored_season,
+                )
+            )
+            seen.add(league)
+        for code, name in COMPETITIONS:
+            if name not in seen:
+                options.append((f"{name}|{season}", f"{name}  [dim]{code}[/dim]", season))
+        return options
+
     def action_pick_league(self) -> None:
         league = self.controller.league()
+        self._options = self._league_options()
+        current = f"{league[0]}|{league[1]}" if league else None
         self.app.push_screen(
-            LeaguePicker(COMPETITIONS, league[0] if league else None),
+            LeaguePicker([(key, label) for key, label, _ in self._options], current),
             self._picked_league,
         )
 
-    def _picked_league(self, name: str | None) -> None:
-        if not name:
+    def _picked_league(self, key: str | None) -> None:
+        if not key:
             return
+        chosen = next((option for option in self._options if option[0] == key), None)
+        if chosen is None:
+            return
+        league = chosen[0].split("|")[0]
         controller = self.controller
-        controller.set_league(name, season_for(controller.now()))
+        controller.set_league(league, chosen[2])
         self._refresh_source()
-        self.notify(f"Liga: {escape(name)}")
-        cast("TyperApp", self.app).sync_now()
+        self.notify(f"Liga: {escape(league)}")
+        if controller.can_sync():
+            cast("TyperApp", self.app).sync_now()
+
+    def action_remove_demo(self) -> None:
+        controller = self.controller
+        if not controller.has_demo_data():
+            self.notify("Nie ma już danych demo", severity="information")
+            return
+        self.app.push_screen(
+            Confirm(
+                f"Usunąć dane demo: ligę {escape(DEMO_LEAGUE)} oraz graczy "
+                f"{', '.join(DEMO_PLAYERS)} razem z ich typami?",
+                confirm="Tak, usuń demo",
+            ),
+            self._remove_demo,
+        )
+
+    async def _remove_demo(self, confirmed: bool) -> None:
+        if not confirmed:
+            return
+        matchdays, players = self.controller.remove_demo_data()
+        await self._reload_players()
+        self._refresh_source()
+        self.notify(f"Usunięto kolejki demo: {matchdays}, graczy: {players}")
 
     def action_restore_defaults(self) -> None:
         self.app.push_screen(

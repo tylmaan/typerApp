@@ -56,13 +56,17 @@ class PlayerPicker(ModalScreen[int | None]):
 
 
 class LeaguePicker(ModalScreen[str | None]):
-    """The competitions the free API plan covers. Returns the chosen league's name."""
+    """Picks a league from ``(key, label)`` entries and returns the chosen key.
+
+    The caller decides what a key means, so the list can mix leagues already in the database
+    with the competitions the free API plan covers.
+    """
 
     BINDINGS = [Binding("escape", "cancel", "Anuluj")]
 
-    def __init__(self, competitions: Sequence[tuple[str, str]], current: str | None = None) -> None:
+    def __init__(self, entries: Sequence[tuple[str, str]], current: str | None = None) -> None:
         super().__init__()
-        self._competitions = list(competitions)
+        self._entries = list(entries)
         self._current = current
 
     def compose(self) -> ComposeResult:
@@ -71,10 +75,10 @@ class LeaguePicker(ModalScreen[str | None]):
             yield ListView(
                 *[
                     ListItem(
-                        Label(f"{'▸ ' if name == self._current else '  '}{name}  [{code}]"),
-                        id=f"league-{code}",
+                        Label(f"{'▸ ' if key == self._current else '  '}{label}", markup=True),
+                        id=f"league-{index}",
                     )
-                    for code, name in self._competitions
+                    for index, (key, label) in enumerate(self._entries)
                 ],
                 id="league-list",
             )
@@ -84,14 +88,13 @@ class LeaguePicker(ModalScreen[str | None]):
         listing = self.query_one("#league-list", ListView)
         listing.focus()
         listing.index = next(
-            (index for index, (_, name) in enumerate(self._competitions) if name == self._current),
+            (index for index, (key, _) in enumerate(self._entries) if key == self._current),
             0,
         )
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
-        code = (event.item.id or "").removeprefix("league-")
-        name = next((n for c, n in self._competitions if c == code), None)
-        self.dismiss(name)
+        index = int((event.item.id or "league-0").removeprefix("league-"))
+        self.dismiss(self._entries[index][0] if index < len(self._entries) else None)
 
     def action_cancel(self) -> None:
         self.dismiss(None)

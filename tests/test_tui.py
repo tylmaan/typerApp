@@ -14,10 +14,10 @@ import pytest
 from textual.widgets import Label, ListItem, ListView
 
 from typerapp_core.controller import TyperController
+from typerapp_core.demo import LEAGUE as DEMO_LEAGUE
 from typerapp_core.demo import OPEN_MATCHDAY, PLAYED_MATCHDAY, seed_demo_data
 from typerapp_core.events import EventBus
 from typerapp_core.models import MatchStatus, Score, ScoringRules
-from typerapp_core.providers.api import COMPETITIONS
 from typerapp_core.providers.base import ProviderUnavailable
 from typerapp_core.repository import Repository
 from typerapp_tui.app import TyperApp
@@ -699,7 +699,7 @@ def test_pressing_s_fetches_and_rebuilds_the_matchday() -> None:
             await app.workers.wait_for_complete()
             await pilot.pause()
 
-            assert provider.asked == [12, 13]
+            assert provider.asked == [12, 13, 14]
             assert app.controller.last_sync() is not None
             assert len(app.screen.query(MatchRow)) == before + 1
         repository.close()
@@ -771,14 +771,174 @@ def test_league_can_be_picked_in_the_settings() -> None:
 
             await pilot.press("l")
             await pilot.pause()
-            await pilot.press("down", "enter")  # the second competition on the list
+            listing = app.screen.query_one("#league-list", ListView)
+            listing.index = 1  # the second entry, whatever the list happens to start with
+            expected = str(listing.children[1].query_one(Label).content)
+            await pilot.press("enter")
             await app.workers.wait_for_complete()
             await pilot.pause()
 
             league = app.controller.league()
             assert league is not None
-            assert league[0] == COMPETITIONS[1][1]
+            assert league[0] in expected
             assert "/" in league[1]  # the season, written 2026/27
+        repository.close()
+
+    run(scenario)
+
+
+# --------------------------------------------------- bugs reported after stage 5
+
+
+def test_q_leaves_the_app() -> None:
+    # Textual does not pass a screen binding's action up to the app, so the menu needs
+    # its own action_quit. Without it the key did nothing at all.
+    async def scenario() -> None:
+        repository, app = build()
+        async with app.run_test() as pilot:
+            await pilot.press("q")
+            await pilot.pause()
+
+            assert app._exit
+        repository.close()
+
+    run(scenario)
+
+
+def test_matchday_can_be_switched_without_leaving_the_screen() -> None:
+    async def scenario() -> None:
+        repository, app = build()
+        async with app.run_test() as pilot:
+            await pilot.press("enter")
+            await pilot.pause()
+            first = app.screen.matchday_id
+
+            await pilot.press("shift+right")
+            await pilot.pause()
+            second = app.screen.matchday_id
+
+            await pilot.press("]")
+            await pilot.pause()
+
+            assert second != first
+            assert app.screen.matchday_id == first  # two matchdays, so it wraps around
+            assert len(app.screen.query(MatchRow)) == 5
+        repository.close()
+
+    run(scenario)
+
+
+def test_switching_shows_the_other_matchdays_matches() -> None:
+    async def scenario() -> None:
+        repository, app = build()
+        async with app.run_test() as pilot:
+            await pilot.press("enter")
+            await pilot.pause()
+            before = {row.match.home_team for row in app.screen.query(MatchRow)}
+
+            await pilot.press("[")
+            await pilot.pause()
+
+            after = {row.match.home_team for row in app.screen.query(MatchRow)}
+            assert before != after
+            assert "1/2" in str(app.screen.query_one("#matchday-title").content) or "2/2" in str(
+                app.screen.query_one("#matchday-title").content
+            )
+        repository.close()
+
+    run(scenario)
+
+
+def test_the_league_picker_offers_the_demo_league() -> None:
+    async def scenario() -> None:
+        repository, app = build(provider=FakeProvider(current=None))
+        async with app.run_test() as pilot:
+            await pilot.press("down", "down", "down", "enter")  # settings
+            await pilot.pause()
+
+            await pilot.press("l")
+            await pilot.pause()
+
+            labels = [
+                str(item.query_one(Label).content)
+                for item in app.screen.query_one("#league-list", ListView).children
+            ]
+            assert any(DEMO_LEAGUE in label for label in labels)
+            assert any("Premier League  [dim]PL" in label for label in labels)
+        repository.close()
+
+    run(scenario)
+
+
+def test_going_back_to_the_demo_league_is_possible() -> None:
+    async def scenario() -> None:
+        repository, app = build(provider=FakeProvider(current=None))
+        async with app.run_test() as pilot:
+            app.controller.set_league("Premier League", "2026/27")
+            await pilot.press("down", "down", "down", "enter")
+            await pilot.pause()
+
+            await pilot.press("l")
+            await pilot.pause()
+            listing = app.screen.query_one("#league-list", ListView)
+            index = next(
+                i
+                for i, item in enumerate(listing.children)
+                if DEMO_LEAGUE in str(item.query_one(Label).content)
+            )
+            listing.index = index
+            await pilot.press("enter")
+            await pilot.pause()
+
+            assert app.controller.league() == (DEMO_LEAGUE, "2026/27")
+        repository.close()
+
+    run(scenario)
+
+
+def test_demo_data_can_be_removed_from_the_settings() -> None:
+    async def scenario() -> None:
+        repository, app = build()
+        async with app.run_test() as pilot:
+            await pilot.press("down", "down", "down", "enter")
+            await pilot.pause()
+            assert app.controller.has_demo_data()
+
+            await pilot.press("d")
+            await pilot.pause()
+            await pilot.click("#yes")
+            await pilot.pause()
+
+            assert not app.controller.has_demo_data()
+            assert app.controller.players() == []
+            assert app.controller.matchdays() == []
+            assert app.controller.league() is None
+            assert repository.is_empty()
+        repository.close()
+
+    run(scenario)
+
+
+def test_removing_the_demo_leaves_other_leagues_alone() -> None:
+    async def scenario() -> None:
+        provider = FakeProvider({8: [fetched()]}, current=8)
+        repository, app = build(provider=provider)
+        async with app.run_test() as pilot:
+            app.controller.set_league("Premier League", "2026/27")
+            app.controller.sync()
+            own = app.controller.add_player("Marek")
+            await pilot.pause()
+
+            await pilot.press("down", "down", "down", "enter")
+            await pilot.pause()
+            await pilot.press("d")
+            await pilot.pause()
+            await pilot.click("#yes")
+            await pilot.pause()
+
+            assert [p.name for p in app.controller.players()] == ["Marek"]
+            assert app.controller.active_player() == own
+            assert [d.number for d in app.controller.matchdays()] == [8]
         repository.close()
 
     run(scenario)

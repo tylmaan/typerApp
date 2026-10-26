@@ -237,6 +237,15 @@ class Repository:
             id=int(row[0]),  # type: ignore[index]
         )
 
+    def leagues(self) -> list[tuple[str, str]]:
+        """Every league and season that has at least one matchday stored."""
+        rows = self._query("SELECT DISTINCT league, season FROM matchdays ORDER BY league, season")
+        return [(row["league"], row["season"]) for row in rows]
+
+    def delete_matchday(self, matchday_id: int) -> None:
+        """Removes the matchday together with its matches and all their predictions."""
+        self._execute("DELETE FROM matchdays WHERE id = ?", (matchday_id,))
+
     def matchdays(self, league: str, season: str) -> list[Matchday]:
         rows = self._query(
             "SELECT * FROM matchdays WHERE league = ? AND season = ? ORDER BY number",

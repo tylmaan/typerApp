@@ -163,11 +163,17 @@ class TyperController:
         active = self.league()
         return self.repository.matchdays(*active) if active else []
 
-    def current_matchday(self) -> Matchday | None:
-        """The matchday to open by default: the next one still taking predictions.
+    def known_leagues(self) -> list[tuple[str, str]]:
+        """Leagues and seasons already in the database, so the settings can offer them."""
+        return self.repository.leagues()
 
-        With every matchday closed, the most recent one is shown instead, so the app always
-        has something to display.
+    def current_matchday(self) -> Matchday | None:
+        """The matchday to open by default: the next one there is still something to do in.
+
+        A matchday counts as that when its deadline has not passed *and* at least one match
+        is still to be played. A round whose results are already in therefore does not block
+        the way. With nothing open, the most recent matchday is shown, so the app always has
+        something to display.
         """
         matchdays = self.matchdays()
         if not matchdays:
@@ -175,6 +181,7 @@ class TyperController:
 
         now = self.now()
         rules = self.rules()
+        todo: list[tuple[datetime, Matchday]] = []
         open_days: list[tuple[datetime, Matchday]] = []
         latest: list[tuple[datetime, Matchday]] = []
         for matchday in matchdays:
@@ -185,8 +192,11 @@ class TyperController:
             latest.append((deadline, matchday))
             if now < deadline:
                 open_days.append((deadline, matchday))
-        if open_days:
-            return min(open_days, key=lambda pair: pair[0])[1]
+                if any(match.status is MatchStatus.SCHEDULED for match in matches):
+                    todo.append((deadline, matchday))
+        for candidates in (todo, open_days):
+            if candidates:
+                return min(candidates, key=lambda pair: pair[0])[1]
         if latest:
             return max(latest, key=lambda pair: pair[0])[1]
         return matchdays[-1]
@@ -379,10 +389,12 @@ class TyperController:
         changed = 0
         try:
             for number in self._sync_targets(league):
+                fetched = self.provider.fetch_matchday(league[0], league[1], number)
+                if not fetched:
+                    continue  # no fixtures: do not leave an empty matchday behind
                 matchday = self.repository.upsert_matchday(
                     Matchday(league=league[0], season=league[1], number=number)
                 )
-                fetched = self.provider.fetch_matchday(league[0], league[1], number)
                 changed += self._store_fetched(matchday.id, fetched)  # type: ignore[arg-type]
         except ProviderError as error:
             self.events.publish(SyncFailed(source=source, message=str(error)))
@@ -393,7 +405,11 @@ class TyperController:
         return changed
 
     def _sync_targets(self, league: tuple[str, str]) -> list[int]:
-        """The current matchday and the one before it, so finished games are filled in too.
+        """The matchday before, the current one and the next one.
+
+        The one before fills in results that arrived late, and the next one is the whole
+        point of the game: without it there would be nothing left to predict, because the
+        current matchday is usually already being played.
 
         The source is asked first, and only then our own data. The other way round the demo
         seed would decide what to fetch, and real fixtures would be merged into demo
@@ -405,7 +421,7 @@ class TyperController:
             number = current.number if current else None
         if not number:
             return []
-        return [number - 1, number] if number > 1 else [number]
+        return [n for n in (number - 1, number, number + 1) if n >= 1]
 
     def _store_fetched(self, matchday_id: int, fetched: Iterable[FetchedMatch]) -> int:
         before = {match.id: match for match in self.repository.matches(matchday_id)}
@@ -507,6 +523,33 @@ class TyperController:
             self.events.publish(MatchesUpdated(matchday_id=matchday.id))  # type: ignore[arg-type]
         self.events.publish(ActivePlayerChanged(player=self.active_player()))
         self.refresh_ranking()
+
+    def has_demo_data(self) -> bool:
+        from typerapp_core.demo import LEAGUE, PLAYER_NAMES, SEASON
+
+        if self.repository.matchdays(LEAGUE, SEASON):
+            return True
+        return any(player.name in PLAYER_NAMES for player in self.players())
+
+    def remove_demo_data(self) -> tuple[int, int]:
+        """Drop the sample league and its players, for when the real fixtures took over."""
+        from typerapp_core.demo import remove_demo_data
+
+        removed = remove_demo_data(self.repository)
+
+        active = self.league()
+        if active is not None and active not in self.known_leagues():
+            self.repository.set_setting(ACTIVE_LEAGUE, None)
+            self.repository.set_setting(ACTIVE_SEASON, None)
+            self.events.publish(SettingsChanged(key=ACTIVE_LEAGUE, value=None))
+
+        stored = self.repository.setting(ACTIVE_PLAYER)
+        if stored is None or self.repository.player(int(stored)) is None:
+            remaining = self.players()
+            self.set_active_player(remaining[0].id if remaining else None)
+
+        self.refresh_ranking()
+        return removed
 
     # ------------------------------------------------------------------ helpers
 

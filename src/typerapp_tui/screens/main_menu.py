@@ -221,6 +221,10 @@ class MainMenuScreen(Screen[None]):
     def action_sync(self) -> None:
         cast("TyperApp", self.app).sync_now()
 
+    def action_quit(self) -> None:
+        """Textual does not pass the binding's action up to the app, so it lives here."""
+        self.app.exit()
+
     def action_pick_player(self) -> None:
         players = self.controller.players()
         if not players:

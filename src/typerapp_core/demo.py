@@ -113,6 +113,23 @@ def seed_demo_data(
     repository.set_setting(ACTIVE_PLAYER, players[PLAYER_NAMES[0]].id)
 
 
+def remove_demo_data(repository: Repository) -> tuple[int, int]:
+    """Delete the demo league and the players the seed created.
+
+    Used once the real fixtures are in place and the sample data is only in the way. The
+    matchdays take their matches and predictions with them. Returns how many matchdays and
+    players were removed.
+    """
+    matchdays = repository.matchdays(LEAGUE, SEASON)
+    for matchday in matchdays:
+        repository.delete_matchday(matchday.id)  # type: ignore[arg-type]
+
+    players = [player for player in repository.players() if player.name in PLAYER_NAMES]
+    for player in players:
+        repository.delete_player(player.id)  # type: ignore[arg-type]
+    return len(matchdays), len(players)
+
+
 def _kickoff_day(now: datetime, days: int) -> datetime:
     """A round kickoff time, because real fixtures do not start at 16:36."""
     return (now + timedelta(days=days)).replace(hour=16, minute=0, second=0, microsecond=0)
