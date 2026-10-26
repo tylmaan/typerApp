@@ -52,6 +52,33 @@ class PlayerPicker(ModalScreen[int | None]):
         self.dismiss(None)
 
 
+class Confirm(ModalScreen[bool]):
+    """Asked before anything that cannot be undone, such as deleting a player."""
+
+    BINDINGS = [Binding("escape", "cancel", "Anuluj")]
+
+    def __init__(self, question: str, confirm: str = "Tak, usuń") -> None:
+        super().__init__()
+        self._question = question
+        self._confirm = confirm
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="dialog"):
+            yield Label(self._question, classes="dialog-title")
+            yield Button(self._confirm, variant="error", id="yes")
+            yield Button("Nie", variant="primary", id="no")
+            yield Label("Enter zatwierdź · Esc anuluj", classes="dialog-hint")
+
+    def on_mount(self) -> None:
+        self.query_one("#no", Button).focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "yes")
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
+
 class NamePrompt(ModalScreen[str | None]):
     """Asks for a single line of text, used for adding a player."""
 

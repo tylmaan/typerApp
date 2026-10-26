@@ -25,6 +25,9 @@ from typerapp_core.events import (
 from typerapp_tui.formatting import format_countdown
 from typerapp_tui.screens.dialogs import NamePrompt, PlayerPicker
 from typerapp_tui.screens.matchday import MatchdayScreen
+from typerapp_tui.screens.profile import ProfileScreen
+from typerapp_tui.screens.ranking import RankingScreen
+from typerapp_tui.screens.settings import SettingsScreen
 
 if TYPE_CHECKING:
     from typerapp_core.controller import TyperController
@@ -176,11 +179,11 @@ class MainMenuScreen(Screen[None]):
         if key == "matchday":
             self._open_matchday()
         elif key == "ranking":
-            self.notify("Ranking pojawi się w następnym etapie", severity="information")
+            self.app.push_screen(RankingScreen())
         elif key == "profile":
-            self.notify("Profil pojawi się w następnym etapie", severity="information")
+            self.app.push_screen(ProfileScreen())
         elif key == "settings":
-            self.notify("Ustawienia pojawią się w następnym etapie", severity="information")
+            self.app.push_screen(SettingsScreen())
         elif key == "demo":
             self.controller.load_demo_data()
             await self._rebuild()
@@ -200,7 +203,11 @@ class MainMenuScreen(Screen[None]):
     async def _add_player(self, name: str | None) -> None:
         if not name:
             return
-        self.controller.add_player(name)
+        try:
+            self.controller.add_player(name)
+        except ValueError:
+            self.notify("Taki gracz już istnieje", severity="warning")
+            return
         await self._rebuild()
         self.notify(f"Dodano gracza {escape(name)}")
 

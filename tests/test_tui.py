@@ -7,19 +7,34 @@ to a row in SQLite is covered.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 
-from textual.widgets import Label, ListItem
+import pytest
+from textual.widgets import Label, ListItem, ListView
 
 from typerapp_core.controller import TyperController
-from typerapp_core.demo import OPEN_MATCHDAY, seed_demo_data
+from typerapp_core.demo import OPEN_MATCHDAY, PLAYED_MATCHDAY, seed_demo_data
 from typerapp_core.events import EventBus
-from typerapp_core.models import Score
+from typerapp_core.models import Score, ScoringRules
 from typerapp_core.repository import Repository
 from typerapp_tui.app import TyperApp
 from typerapp_tui.screens.main_menu import MainMenuScreen
 from typerapp_tui.screens.matchday import MatchdayScreen
+from typerapp_tui.screens.profile import ProfileScreen
+from typerapp_tui.screens.ranking import RankingScreen
+from typerapp_tui.screens.settings import SettingsScreen
 from typerapp_tui.widgets.match_row import MatchRow
+from typerapp_tui.widgets.ranking_row import RankingRow
+from typerapp_tui.widgets.setting_row import SettingRow
+
+
+@pytest.fixture(autouse=True)
+def no_swallowed_errors(caplog: pytest.LogCaptureFixture):
+    """The event bus logs and swallows handler errors; here they must fail the test."""
+    yield
+    broken = [record for record in caplog.records if record.levelno >= logging.ERROR]
+    assert not broken, broken[0].getMessage()
 
 
 def build(*, demo: bool = True) -> tuple[Repository, TyperApp]:
@@ -288,6 +303,265 @@ def test_summary_counts_the_predictions() -> None:
             await pilot.pause()
 
             assert "Wytypowano 1 z 5 meczów" in str(summary.content)
+        repository.close()
+
+    run(scenario)
+
+
+# ------------------------------------------------------------------- ranking
+
+
+def test_ranking_lists_every_player() -> None:
+    async def scenario() -> None:
+        repository, app = build()
+        async with app.run_test() as pilot:
+            await pilot.press("down", "enter")
+            await pilot.pause()
+
+            assert isinstance(app.screen, RankingScreen)
+            rows = list(app.screen.query(RankingRow))
+            assert len(rows) == 5
+            assert "ranking ogolny" in str(app.screen.query_one("#ranking-title").content).replace(
+                "ogólny", "ogolny"
+            )
+            assert rows[0].entry.position == 1
+            assert rows[0].entry.points >= rows[-1].entry.points
+        repository.close()
+
+    run(scenario)
+
+
+def test_arrows_switch_between_overall_and_matchdays() -> None:
+    async def scenario() -> None:
+        repository, app = build()
+        async with app.run_test() as pilot:
+            await pilot.press("down", "enter")
+            await pilot.pause()
+            title = app.screen.query_one("#ranking-title")
+
+            await pilot.press("right")
+            await pilot.pause()
+            assert f"kolejka {PLAYED_MATCHDAY}" in str(title.content)
+
+            await pilot.press("left")
+            await pilot.pause()
+            assert "ranking" in str(title.content)
+        repository.close()
+
+    run(scenario)
+
+
+def test_changing_the_rules_reorders_the_ranking() -> None:
+    async def scenario() -> None:
+        repository, app = build()
+        async with app.run_test() as pilot:
+            await pilot.press("down", "enter")
+            await pilot.pause()
+            before = [row.player_id for row in app.screen.query(RankingRow)]
+
+            # Pay only for goal differences: a different player should come out on top.
+            app.controller.save_rules(
+                ScoringRules(
+                    exact_score=0,
+                    goal_difference=50,
+                    correct_outcome=0,
+                    both_teams_scored=0,
+                    total_goals=0,
+                    matchday_sweep=0,
+                )
+            )
+            await pilot.pause()
+
+            rows = list(app.screen.query(RankingRow))
+            assert [row.player_id for row in rows] != before
+            # Strict: both the order of the widgets and their contents have to match the
+            # recomputed table, so a half-finished update cannot pass unnoticed.
+            assert [row.entry for row in rows] == list(app.controller.ranking())
+            assert any(row.delta != 0 for row in rows)
+        repository.close()
+
+    run(scenario)
+
+
+def test_enter_on_a_ranking_row_opens_that_profile() -> None:
+    async def scenario() -> None:
+        repository, app = build()
+        async with app.run_test() as pilot:
+            await pilot.press("down", "enter")
+            await pilot.pause()
+            leader = list(app.screen.query(RankingRow))[0].player_id
+
+            await pilot.press("enter")
+            await pilot.pause()
+
+            assert isinstance(app.screen, ProfileScreen)
+            assert app.screen.player_id == leader
+        repository.close()
+
+    run(scenario)
+
+
+# ------------------------------------------------------------------- profile
+
+
+def test_profile_shows_statistics_and_matchdays() -> None:
+    async def scenario() -> None:
+        repository, app = build()
+        async with app.run_test() as pilot:
+            await pilot.press("down", "down", "enter")
+            await pilot.pause()
+
+            assert isinstance(app.screen, ProfileScreen)
+            assert "Kuba" in str(app.screen.query_one("#profile-name").content)
+            assert "pkt" in str(app.screen.query_one("#profile-headline").content)
+            assert "joker" in str(app.screen.query_one("#profile-extras").content)
+            assert len(app.screen.query_one("#profile-matchdays", ListView).children) == 2
+        repository.close()
+
+    run(scenario)
+
+
+def test_profile_opens_a_matchday_read_only() -> None:
+    async def scenario() -> None:
+        repository, app = build()
+        async with app.run_test() as pilot:
+            await pilot.press("down", "enter")  # ranking
+            await pilot.pause()
+            await pilot.press("enter")  # profile of the leader, who is not the active player
+            await pilot.pause()
+            viewed = app.screen.player_id
+
+            await pilot.press("enter")  # first matchday on the list
+            await pilot.pause()
+
+            assert isinstance(app.screen, MatchdayScreen)
+            assert app.screen.player_id == viewed
+            assert not app.screen.is_own_matchday
+            assert all(not row.editable for row in app.screen.query(MatchRow))
+        repository.close()
+
+    run(scenario)
+
+
+# ------------------------------------------------------------------ settings
+
+
+def test_settings_show_the_current_rules() -> None:
+    async def scenario() -> None:
+        repository, app = build()
+        async with app.run_test() as pilot:
+            await pilot.press("down", "down", "down", "enter")
+            await pilot.pause()
+
+            assert isinstance(app.screen, SettingsScreen)
+            rows = {row.key: row.value for row in app.screen.query(SettingRow)}
+            assert rows["exact_score"] == 5
+            assert rows["prediction_deadline_minutes"] == 5
+            assert len(app.screen.query_one("#settings-players", ListView).children) == 5
+        repository.close()
+
+    run(scenario)
+
+
+def test_typing_a_number_saves_the_rule_and_recomputes_the_ranking() -> None:
+    async def scenario() -> None:
+        repository, app = build()
+        async with app.run_test() as pilot:
+            await pilot.press("down", "down", "down", "enter")
+            await pilot.pause()
+            before = app.controller.ranking()[0].points
+
+            await pilot.press("9")
+            await pilot.pause()
+
+            assert app.controller.rules().exact_score == 9
+            assert repository.scoring_rules().exact_score == 9
+            assert app.controller.ranking()[0].points != before
+        repository.close()
+
+    run(scenario)
+
+
+def test_digits_accumulate_in_a_setting() -> None:
+    async def scenario() -> None:
+        repository, app = build()
+        async with app.run_test() as pilot:
+            await pilot.press("down", "down", "down", "enter")
+            await pilot.pause()
+            deadline = app.screen.query_one("#setting-prediction_deadline_minutes", SettingRow)
+            deadline.focus()
+            await pilot.pause()
+
+            await pilot.press("6", "0")
+            await pilot.pause()
+
+            assert app.controller.rules().prediction_deadline_minutes == 60
+        repository.close()
+
+    run(scenario)
+
+
+def test_plus_and_minus_respect_the_limits() -> None:
+    async def scenario() -> None:
+        repository, app = build()
+        async with app.run_test() as pilot:
+            await pilot.press("down", "down", "down", "enter")
+            await pilot.pause()
+            multiplier = app.screen.query_one("#setting-joker_multiplier", SettingRow)
+            multiplier.focus()
+            await pilot.pause()
+
+            await pilot.press("minus", "minus", "minus")
+            await pilot.pause()
+
+            assert app.controller.rules().joker_multiplier == 1  # never below one
+        repository.close()
+
+    run(scenario)
+
+
+def test_defaults_can_be_restored() -> None:
+    async def scenario() -> None:
+        repository, app = build()
+        async with app.run_test() as pilot:
+            await pilot.press("down", "down", "down", "enter")
+            await pilot.pause()
+            await pilot.press("9")
+            await pilot.pause()
+
+            await pilot.press("r")
+            await pilot.pause()
+            await pilot.click("#yes")
+            await pilot.pause()
+
+            assert app.controller.rules() == ScoringRules()
+            rows = {row.key: row.value for row in app.screen.query(SettingRow)}
+            assert rows["exact_score"] == 5
+        repository.close()
+
+    run(scenario)
+
+
+def test_a_player_can_be_deleted_after_confirmation() -> None:
+    async def scenario() -> None:
+        repository, app = build()
+        async with app.run_test() as pilot:
+            await pilot.press("down", "down", "down", "enter")
+            await pilot.pause()
+            listing = app.screen.query_one("#settings-players", ListView)
+            listing.focus()
+            listing.index = 0
+            await pilot.pause()
+            doomed = str(listing.children[0].query_one(Label).content).strip(" \u25b8")
+
+            await pilot.press("u")
+            await pilot.pause()
+            await pilot.click("#yes")
+            await pilot.pause()
+
+            names = [player.name for player in app.controller.players()]
+            assert doomed not in names
+            assert len(names) == 4
         repository.close()
 
     run(scenario)

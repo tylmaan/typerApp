@@ -155,3 +155,149 @@ PlayerPicker, NamePrompt {
     background: $pitch;
     color: $surface;
 }
+
+/* ------------------------------------------------------------ ranking screen */
+
+#ranking-title {
+    padding: 1 2;
+}
+
+#ranking {
+    margin: 0 2;
+    border: round $pitch-dim;
+    height: auto;
+    max-height: 70%;
+}
+
+RankingRow {
+    height: 1;
+    padding: 0 1;
+}
+
+RankingRow:focus {
+    background: $boost;
+}
+
+RankingRow.-me {
+    text-style: bold;
+}
+
+RankingRow > .rankingrow--position {
+    color: $muted;
+}
+
+RankingRow > .rankingrow--name {
+    color: $text;
+}
+
+RankingRow > .rankingrow--points {
+    color: $pitch;
+    text-style: bold;
+}
+
+RankingRow > .rankingrow--up {
+    color: $pitch;
+}
+
+RankingRow > .rankingrow--down {
+    color: #e06c6c;
+}
+
+RankingRow > .rankingrow--details {
+    color: $muted;
+}
+
+/* ------------------------------------------------------------ profile screen */
+
+#profile-name {
+    padding: 1 2 0 2;
+    color: $pitch;
+}
+
+#profile-headline {
+    padding: 0 2;
+    text-style: bold;
+}
+
+#profile-counters, #profile-extras {
+    padding: 0 2;
+    color: $muted;
+}
+
+#profile-matchdays {
+    margin: 1 2;
+    border: round $pitch-dim;
+    height: auto;
+    max-height: 50%;
+}
+
+#profile-matchdays > ListItem {
+    padding: 0 1;
+    background: $surface;
+}
+
+#profile-matchdays > ListItem.-highlight {
+    background: $pitch-dim;
+}
+
+/* ----------------------------------------------------------- settings screen */
+
+#settings-title {
+    padding: 1 2 0 2;
+}
+
+#settings {
+    margin: 1 2;
+    border: round $pitch-dim;
+    height: auto;
+    max-height: 75%;
+}
+
+#settings > .section {
+    padding: 1 1 0 1;
+    color: $pitch;
+    text-style: bold;
+}
+
+SettingRow {
+    height: 1;
+    padding: 0 1;
+}
+
+SettingRow:focus {
+    background: $boost;
+}
+
+SettingRow > .settingrow--label {
+    color: $text;
+}
+
+SettingRow > .settingrow--value {
+    color: $text;
+    background: $panel;
+}
+
+SettingRow > .settingrow--value-active {
+    color: $surface;
+    background: $pitch;
+    text-style: bold;
+}
+
+SettingRow > .settingrow--hint {
+    color: $muted;
+}
+
+#settings-players {
+    height: auto;
+    max-height: 8;
+    background: $surface;
+}
+
+#settings-players > ListItem {
+    padding: 0 1;
+    background: $surface;
+}
+
+#settings-players > ListItem.-highlight {
+    background: $pitch-dim;
+}

@@ -38,10 +38,23 @@ def format_score(home: int | None, away: int | None, placeholder: str = "·") ->
     return f"{left}:{right}"
 
 
-def plural_matches(count: int) -> str:
+def plural(count: int, one: str, few: str, many: str) -> str:
     """Polish needs three forms: 1 mecz, 2 mecze, 5 meczów."""
     if count == 1:
-        return "1 mecz"
+        return f"{count} {one}"
     if count % 10 in (2, 3, 4) and count % 100 not in (12, 13, 14):
-        return f"{count} mecze"
-    return f"{count} meczów"
+        return f"{count} {few}"
+    return f"{count} {many}"
+
+
+def plural_matches(count: int) -> str:
+    return plural(count, "mecz", "mecze", "meczów")
+
+
+def plural_predictions(count: int) -> str:
+    return plural(count, "typ", "typy", "typów")
+
+
+def format_decimal(value: float, places: int = 1) -> str:
+    """Polish writes 9,0 rather than 9.0."""
+    return f"{value:.{places}f}".replace(".", ",")

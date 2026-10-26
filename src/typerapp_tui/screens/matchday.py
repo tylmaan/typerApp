@@ -36,14 +36,31 @@ class MatchdayScreen(Screen[None]):
         Binding("up", "previous_match", "Poprzedni mecz", show=False),
     ]
 
-    def __init__(self, matchday_id: int) -> None:
+    def __init__(self, matchday_id: int, player_id: int | None = None) -> None:
         super().__init__()
         self.matchday_id = matchday_id
+        #: Set when the screen shows somebody else's predictions, opened from a profile.
+        self._viewed_player_id = player_id
         self._cancels: list = []
 
     @property
     def controller(self) -> TyperController:
         return cast("TyperApp", self.app).controller
+
+    @property
+    def player_id(self) -> int | None:
+        if self._viewed_player_id is not None:
+            return self._viewed_player_id
+        player = self.controller.active_player()
+        return player.id if player else None
+
+    @property
+    def is_own_matchday(self) -> bool:
+        """Only the player holding the keyboard may type; other profiles are read-only."""
+        active = self.controller.active_player()
+        return self._viewed_player_id is None or (
+            active is not None and active.id == self._viewed_player_id
+        )
 
     def compose(self) -> ComposeResult:
         yield Static(id="matchday-title")
@@ -56,8 +73,8 @@ class MatchdayScreen(Screen[None]):
 
     def _rows(self) -> list[MatchRow]:
         controller = self.controller
-        editable = controller.is_open(self.matchday_id)
-        predictions = controller.predictions(self.matchday_id)
+        editable = controller.is_open(self.matchday_id) and self.is_own_matchday
+        predictions = controller.predictions(self.matchday_id, self.player_id)
         rows = []
         for match in controller.matches(self.matchday_id):
             prediction = predictions.get(match.id)
@@ -94,11 +111,13 @@ class MatchdayScreen(Screen[None]):
     def _refresh_title(self) -> None:
         controller = self.controller
         matchday = controller.repository.matchday(self.matchday_id)
-        player = controller.active_player()
+        player_id = self.player_id
+        player = controller.repository.player(player_id) if player_id is not None else None
         number = matchday.number if matchday else "?"
         who = escape(player.name) if player else "brak gracza"
+        label = "typy" if self.is_own_matchday else "typy gracza"
         self.query_one("#matchday-title", Static).update(
-            f"[b]Kolejka {number}[/b]   [dim]gracz[/dim] [b]{who}[/b]"
+            f"[b]Kolejka {number}[/b]   [dim]{label}[/dim] [b]{who}[/b]"
         )
 
     def _refresh_countdown(self) -> None:
@@ -121,7 +140,7 @@ class MatchdayScreen(Screen[None]):
 
     def _reload_predictions(self) -> None:
         """Another player took the seat, or a result arrived: refill the rows in place."""
-        predictions = self.controller.predictions(self.matchday_id)
+        predictions = self.controller.predictions(self.matchday_id, self.player_id)
         for row in self.query(MatchRow):
             prediction = predictions.get(row.match_id)
             if prediction is None:
@@ -133,8 +152,7 @@ class MatchdayScreen(Screen[None]):
 
     def _on_prediction_saved(self, event: PredictionSaved) -> None:
         saved = event.prediction
-        player = self.controller.active_player()
-        if player is None or saved.player_id != player.id:
+        if saved.player_id != self.player_id:
             return
         for row in self.query(MatchRow):
             if row.match_id == saved.match_id:

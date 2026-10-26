@@ -104,6 +104,10 @@ class TyperController:
         return self.set_active_player(following.id)
 
     def add_player(self, name: str) -> Player:
+        """Add a player. Names have to be unique, ignoring case, so hot-seat stays readable."""
+        name = name.strip()
+        if any(existing.name.casefold() == name.casefold() for existing in self.players()):
+            raise ValueError(f"Player {name} already exists")
         player = self.repository.add_player(name)
         # The stored setting, not active_player(): its fallback would already point at
         # somebody, so the first player added would never actually take the seat.
