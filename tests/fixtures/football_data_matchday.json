@@ -1,0 +1,49 @@
+{
+  "filters": { "season": "2026", "matchday": "12" },
+  "resultSet": { "count": 3, "first": "2026-11-07", "last": "2026-11-08", "played": 1 },
+  "competition": { "id": 2021, "name": "Premier League", "code": "PL", "type": "LEAGUE" },
+  "matches": [
+    {
+      "id": 497365,
+      "utcDate": "2026-11-07T15:00:00Z",
+      "status": "FINISHED",
+      "matchday": 12,
+      "homeTeam": { "id": 57, "name": "Arsenal FC", "shortName": "Arsenal", "tla": "ARS" },
+      "awayTeam": { "id": 61, "name": "Chelsea FC", "shortName": "Chelsea", "tla": "CHE" },
+      "score": {
+        "winner": "HOME_TEAM",
+        "duration": "REGULAR",
+        "fullTime": { "home": 2, "away": 1 },
+        "halfTime": { "home": 1, "away": 0 }
+      }
+    },
+    {
+      "id": 497366,
+      "utcDate": "2026-11-07T17:30:00Z",
+      "status": "TIMED",
+      "matchday": 12,
+      "homeTeam": { "id": 64, "name": "Liverpool FC", "shortName": "Liverpool", "tla": "LIV" },
+      "awayTeam": { "id": 62, "name": "Everton FC", "shortName": "Everton", "tla": "EVE" },
+      "score": {
+        "winner": null,
+        "duration": "REGULAR",
+        "fullTime": { "home": null, "away": null },
+        "halfTime": { "home": null, "away": null }
+      }
+    },
+    {
+      "id": 497367,
+      "utcDate": "2026-11-08T14:00:00Z",
+      "status": "POSTPONED",
+      "matchday": 12,
+      "homeTeam": { "id": 65, "name": "Manchester City FC", "shortName": "Man City", "tla": "MCI" },
+      "awayTeam": { "id": 397, "name": "Brighton & Hove Albion FC", "shortName": "Brighton", "tla": "BHA" },
+      "score": {
+        "winner": null,
+        "duration": "REGULAR",
+        "fullTime": { "home": null, "away": null },
+        "halfTime": { "home": null, "away": null }
+      }
+    }
+  ]
+}
