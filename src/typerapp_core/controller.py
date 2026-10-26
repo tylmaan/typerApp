@@ -1,0 +1,382 @@
+"""The single entry point views are allowed to use.
+
+A view asks the controller for data and tells it what the player did. It never touches the
+repository, the scoring rules or the providers. Everything the controller changes is
+announced on the event bus, which is how the view learns that one row, and only one row,
+needs redrawing.
+
+The controller is synchronous and knows nothing about asyncio or Qt. The current time comes
+from an injected clock, so tests can stand a minute before a deadline without waiting.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Iterable
+from datetime import datetime, timedelta
+
+from typerapp_core.events import (
+    ActivePlayerChanged,
+    EventBus,
+    MatchesUpdated,
+    PointsAwarded,
+    PredictionSaved,
+    RankingChanged,
+    ResultsUpdated,
+    SettingsChanged,
+)
+from typerapp_core.models import (
+    Match,
+    Matchday,
+    MatchStatus,
+    Player,
+    Prediction,
+    RankingEntry,
+    Score,
+    ScoringRules,
+    utc_now,
+)
+from typerapp_core.ranking import build_ranking
+from typerapp_core.repository import (
+    ACTIVE_LEAGUE,
+    ACTIVE_PLAYER,
+    ACTIVE_SEASON,
+    Repository,
+)
+from typerapp_core.scoring import (
+    PointsBreakdown,
+    PredictionError,
+    ensure_can_predict,
+    ensure_joker_available,
+    is_matchday_open,
+    matchday_deadline,
+    score_prediction,
+)
+
+
+class TyperController:
+    """Game logic as the views see it."""
+
+    def __init__(
+        self,
+        repository: Repository,
+        events: EventBus,
+        clock: Callable[[], datetime] = utc_now,
+    ) -> None:
+        self.repository = repository
+        self.events = events
+        self.clock = clock
+        self._rules: ScoringRules | None = None
+        #: Last published ranking per view (``None`` key is the overall one), for animations.
+        self._last_ranking: dict[int | None, tuple[RankingEntry, ...]] = {}
+
+    def now(self) -> datetime:
+        return self.clock()
+
+    # ----------------------------------------------------------------- players
+
+    def players(self) -> list[Player]:
+        return self.repository.players()
+
+    def active_player(self) -> Player | None:
+        """The player holding the keyboard right now. Falls back to the first one."""
+        stored = self.repository.setting(ACTIVE_PLAYER)
+        if stored is not None:
+            player = self.repository.player(int(stored))
+            if player is not None:
+                return player
+        players = self.players()
+        return players[0] if players else None
+
+    def set_active_player(self, player_id: int | None) -> Player | None:
+        self.repository.set_setting(ACTIVE_PLAYER, player_id)
+        player = self.repository.player(player_id) if player_id is not None else None
+        self.events.publish(ActivePlayerChanged(player=player))
+        return player
+
+    def switch_player(self, step: int = 1) -> Player | None:
+        """Hot-seat: hand the keyboard to the next or previous player in the list."""
+        players = self.players()
+        if not players:
+            return None
+        current = self.active_player()
+        index = players.index(current) if current in players else 0
+        following = players[(index + step) % len(players)]
+        return self.set_active_player(following.id)
+
+    def add_player(self, name: str) -> Player:
+        player = self.repository.add_player(name)
+        # The stored setting, not active_player(): its fallback would already point at
+        # somebody, so the first player added would never actually take the seat.
+        if self.repository.setting(ACTIVE_PLAYER) is None:
+            self.set_active_player(player.id)
+        return player
+
+    def rename_player(self, player_id: int, name: str) -> None:
+        self.repository.rename_player(player_id, name)
+        self.refresh_ranking()
+
+    def delete_player(self, player_id: int) -> None:
+        """Removes the player and their predictions, and hands the seat to somebody else."""
+        self.repository.delete_player(player_id)
+        if self.repository.setting(ACTIVE_PLAYER) == str(player_id):
+            remaining = self.players()
+            self.set_active_player(remaining[0].id if remaining else None)
+        self.refresh_ranking()
+
+    # --------------------------------------------------------------- matchdays
+
+    def league(self) -> tuple[str, str] | None:
+        """The active league and season, or ``None`` when nothing is configured yet."""
+        league = self.repository.setting(ACTIVE_LEAGUE)
+        season = self.repository.setting(ACTIVE_SEASON)
+        return (league, season) if league and season else None
+
+    def set_league(self, league: str, season: str) -> None:
+        self.repository.set_setting(ACTIVE_LEAGUE, league)
+        self.repository.set_setting(ACTIVE_SEASON, season)
+        self.events.publish(SettingsChanged(key=ACTIVE_LEAGUE, value=league))
+
+    def matchdays(self) -> list[Matchday]:
+        active = self.league()
+        return self.repository.matchdays(*active) if active else []
+
+    def current_matchday(self) -> Matchday | None:
+        """The matchday to open by default: the next one still taking predictions.
+
+        With every matchday closed, the most recent one is shown instead, so the app always
+        has something to display.
+        """
+        matchdays = self.matchdays()
+        if not matchdays:
+            return None
+
+        now = self.now()
+        rules = self.rules()
+        open_days: list[tuple[datetime, Matchday]] = []
+        latest: list[tuple[datetime, Matchday]] = []
+        for matchday in matchdays:
+            matches = self.matches(matchday.id)  # type: ignore[arg-type]
+            deadline = matchday_deadline(matches, rules)
+            if deadline is None:
+                continue
+            latest.append((deadline, matchday))
+            if now < deadline:
+                open_days.append((deadline, matchday))
+        if open_days:
+            return min(open_days, key=lambda pair: pair[0])[1]
+        if latest:
+            return max(latest, key=lambda pair: pair[0])[1]
+        return matchdays[-1]
+
+    def matches(self, matchday_id: int) -> list[Match]:
+        return self.repository.matches(matchday_id)
+
+    def deadline(self, matchday_id: int) -> datetime | None:
+        return matchday_deadline(self.matches(matchday_id), self.rules())
+
+    def is_open(self, matchday_id: int) -> bool:
+        return is_matchday_open(self.matches(matchday_id), self.now(), self.rules())
+
+    def time_left(self, matchday_id: int) -> timedelta | None:
+        """How long until predictions close. Negative or ``None`` means closed."""
+        deadline = self.deadline(matchday_id)
+        return deadline - self.now() if deadline else None
+
+    def store_matches(self, matches: Iterable[Match]) -> list[Match]:
+        """Used by the sync: save fixtures and tell the views the list changed."""
+        stored = self.repository.upsert_matches(matches)
+        for matchday_id in {match.matchday_id for match in stored}:
+            self.events.publish(MatchesUpdated(matchday_id=matchday_id))
+        return stored
+
+    # ------------------------------------------------------------- predictions
+
+    def predictions(self, matchday_id: int, player_id: int | None = None) -> dict[int, Prediction]:
+        """The player's predictions in a matchday, keyed by match id for easy lookup."""
+        if player_id is None:
+            player = self.active_player()
+            if player is None:
+                return {}
+            player_id = player.id
+        return {
+            prediction.match_id: prediction
+            for prediction in self.repository.predictions(
+                matchday_id=matchday_id, player_id=player_id
+            )
+        }
+
+    def save_prediction(
+        self,
+        match_id: int,
+        home_goals: int,
+        away_goals: int,
+        *,
+        player_id: int | None = None,
+    ) -> Prediction:
+        """Save or overwrite a prediction, keeping any joker already placed on the match."""
+        match = self._match(match_id)
+        player_id = player_id if player_id is not None else self._active_player_id()
+        ensure_can_predict(match, self.matches(match.matchday_id), self.now(), self.rules())
+
+        existing = self.repository.predictions(player_id=player_id)
+        joker = any(p.match_id == match_id and p.joker for p in existing)
+        saved = self.repository.save_prediction(
+            Prediction(
+                player_id=player_id,
+                match_id=match_id,
+                home_goals=home_goals,
+                away_goals=away_goals,
+                joker=joker,
+                created_at=self.now(),
+            )
+        )
+        self.events.publish(PredictionSaved(prediction=saved))
+        return saved
+
+    def toggle_joker(self, match_id: int, *, player_id: int | None = None) -> Prediction:
+        """Move the joker onto this match, or take it off if it is already here.
+
+        Only a predicted match can carry the joker, so the view asks for a score first.
+        """
+        match = self._match(match_id)
+        player_id = player_id if player_id is not None else self._active_player_id()
+        ensure_can_predict(match, self.matches(match.matchday_id), self.now(), self.rules())
+
+        in_matchday = self.predictions(match.matchday_id, player_id)
+        current = in_matchday.get(match_id)
+        if current is None:
+            raise PredictionError("The match has to be predicted before it can carry the joker")
+
+        if not current.joker:
+            ensure_joker_available(
+                Prediction(
+                    player_id=player_id,
+                    match_id=match_id,
+                    home_goals=current.home_goals,
+                    away_goals=current.away_goals,
+                    joker=True,
+                ),
+                [],  # the joker moves freely until the deadline, so nothing blocks it
+                self.rules(),
+            )
+            self.repository.clear_joker(player_id, match.matchday_id)
+
+        saved = self.repository.save_prediction(
+            Prediction(
+                player_id=player_id,
+                match_id=match_id,
+                home_goals=current.home_goals,
+                away_goals=current.away_goals,
+                joker=not current.joker,
+                created_at=current.created_at,
+            )
+        )
+        self.events.publish(PredictionSaved(prediction=saved))
+        return saved
+
+    # ----------------------------------------------------------------- results
+
+    def enter_result(
+        self,
+        match_id: int,
+        score: Score | None,
+        status: MatchStatus = MatchStatus.FINISHED,
+    ) -> dict[int, PointsBreakdown]:
+        """Store a result, award the points and refresh the leaderboard.
+
+        Returns each player's breakdown, which the view uses to animate the points flying in.
+        """
+        match = self._match(match_id)
+        self.repository.set_result(match_id, score, status)
+        self.events.publish(ResultsUpdated(match_ids=(match_id,)))
+
+        awarded: dict[int, PointsBreakdown] = {}
+        if score is not None and status is MatchStatus.FINISHED:
+            rules = self.rules()
+            for prediction in self.repository.predictions(matchday_id=match.matchday_id):
+                if prediction.match_id == match_id:
+                    awarded[prediction.player_id] = score_prediction(prediction, score, rules)
+            self.events.publish(
+                PointsAwarded(
+                    match_id=match_id,
+                    points=tuple(
+                        (player_id, breakdown.total) for player_id, breakdown in awarded.items()
+                    ),
+                )
+            )
+        self.refresh_ranking()
+        return awarded
+
+    # ----------------------------------------------------------------- ranking
+
+    def ranking(self, matchday_id: int | None = None) -> tuple[RankingEntry, ...]:
+        return build_ranking(
+            self.players(),
+            self.repository.predictions(matchday_id=matchday_id),
+            self.repository.matches(matchday_id),
+            self.rules(),
+            matchday_id=matchday_id,
+        )
+
+    def refresh_ranking(self, matchday_id: int | None = None) -> tuple[RankingEntry, ...]:
+        """Recompute the table and publish it together with the previous one."""
+        entries = self.ranking(matchday_id)
+        previous = self._last_ranking.get(matchday_id, ())
+        self._last_ranking[matchday_id] = entries
+        self.events.publish(
+            RankingChanged(matchday_id=matchday_id, entries=entries, previous=previous)
+        )
+        return entries
+
+    def points_for(self, prediction: Prediction, match: Match) -> PointsBreakdown | None:
+        """What a prediction was worth, so the view can show it next to the match."""
+        if not match.is_settled or match.score is None:
+            return None
+        return score_prediction(prediction, match.score, self.rules())
+
+    def player_entry(self, player_id: int) -> RankingEntry | None:
+        return next((entry for entry in self.ranking() if entry.player_id == player_id), None)
+
+    # ---------------------------------------------------------------- settings
+
+    def rules(self) -> ScoringRules:
+        if self._rules is None:
+            self._rules = self.repository.scoring_rules()
+        return self._rules
+
+    def save_rules(self, rules: ScoringRules) -> None:
+        """Changing the rules recomputes every point in the game, by design."""
+        self.repository.save_scoring_rules(rules)
+        self._rules = rules
+        self.events.publish(SettingsChanged(key="rules", value=rules))
+        self.refresh_ranking()
+
+    # -------------------------------------------------------------------- demo
+
+    def is_empty(self) -> bool:
+        return self.repository.is_empty()
+
+    def load_demo_data(self) -> None:
+        from typerapp_core.demo import seed_demo_data
+
+        seed_demo_data(self.repository, now=self.now())
+        self._rules = None
+        matchday = self.current_matchday()
+        if matchday is not None:
+            self.events.publish(MatchesUpdated(matchday_id=matchday.id))  # type: ignore[arg-type]
+        self.events.publish(ActivePlayerChanged(player=self.active_player()))
+        self.refresh_ranking()
+
+    # ------------------------------------------------------------------ helpers
+
+    def _match(self, match_id: int) -> Match:
+        match = self.repository.match(match_id)
+        if match is None:
+            raise LookupError(f"No match with id {match_id}")
+        return match
+
+    def _active_player_id(self) -> int:
+        player = self.active_player()
+        if player is None or player.id is None:
+            raise PredictionError("No active player")
+        return player.id
