@@ -306,3 +306,24 @@ def test_a_matchday_without_fixtures_is_not_created(
 
     assert provider.asked == [11, 12, 13]
     assert [day.number for day in controller.matchdays()] == [12]
+
+
+def test_the_overall_ranking_counts_the_active_league_only(
+    repo: Repository, bus: EventBus, clock: Clock
+) -> None:
+    # The demo league and a fetched one can sit in the database side by side; their points
+    # must not be added together.
+    seed_demo_data(repo)
+    provider = FakeProvider(
+        {8: [fetched(status=MatchStatus.FINISHED, score=Score(2, 1))]}, current=8
+    )
+    controller = TyperController(repo, bus, clock, provider)
+    controller.set_league(*LEAGUE)
+    controller.sync()
+
+    assert [day.number for day in controller.matchdays()] == [8]
+    demo_points = max(entry.points for entry in controller.ranking())
+    assert demo_points == 0  # nobody predicted anything in the fetched league
+
+    controller.set_league(DEMO_LEAGUE, "2026/27")
+    assert max(entry.points for entry in controller.ranking()) > 0

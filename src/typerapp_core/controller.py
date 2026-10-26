@@ -454,13 +454,27 @@ class TyperController:
     # ----------------------------------------------------------------- ranking
 
     def ranking(self, matchday_id: int | None = None) -> tuple[RankingEntry, ...]:
+        """The leaderboard of one matchday, or of the active league.
+
+        The overall table counts the active league only: with the demo league and a fetched
+        one side by side in the database, summing everything would mix two games into one
+        score.
+        """
         return build_ranking(
             self.players(),
             self.repository.predictions(matchday_id=matchday_id),
-            self.repository.matches(matchday_id),
+            self._ranked_matches(matchday_id),
             self.rules(),
             matchday_id=matchday_id,
         )
+
+    def _ranked_matches(self, matchday_id: int | None) -> list[Match]:
+        if matchday_id is not None:
+            return self.repository.matches(matchday_id)
+        if self.league() is None:
+            return self.repository.matches()  # nothing chosen yet, so count everything
+        own = {matchday.id for matchday in self.matchdays()}
+        return [match for match in self.repository.matches() if match.matchday_id in own]
 
     def refresh_ranking(self, matchday_id: int | None = None) -> tuple[RankingEntry, ...]:
         """Recompute the table and publish it together with the previous one."""
