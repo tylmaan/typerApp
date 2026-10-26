@@ -75,6 +75,10 @@ class Score:
     def __str__(self) -> str:
         return f"{self.home}:{self.away}"
 
+    def __format__(self, spec: str) -> str:
+        """So ``f"{score:>5}"`` lines results up in a column instead of raising."""
+        return format(str(self), spec)
+
 
 @dataclass(frozen=True, slots=True)
 class Player:

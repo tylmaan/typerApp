@@ -31,6 +31,7 @@ def test_score_derived_values() -> None:
     assert (score.difference, score.total, score.both_scored) == (2, 4, True)
     assert not Score(3, 0).both_scored
     assert str(score) == "3:1"
+    assert f"{score:>5}" == "  3:1"  # results line up in a column
 
 
 @pytest.mark.parametrize(("home", "away"), [(-1, 0), (0, -2)])
