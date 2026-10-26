@@ -157,11 +157,12 @@ class MainMenuScreen(Screen[None]):
         table = controller.ranking()
         player = controller.active_player()
         mine = next((e for e in table if player and e.player_id == player.id), None)
-        if table:
-            leader = table[0]
-            hints["ranking"] = f"1. {escape(leader.player_name)} {leader.points} pkt"
-            if mine is not None:
-                hints["ranking"] += f" · ty {mine.position}. z {mine.points} pkt"
+        if mine is not None:
+            # The player's own standing, and nothing else: the leader was repeated here
+            # whenever the two happened to be the same person.
+            hints["ranking"] = f"   {mine.position}. miejsce · {mine.points} pkt"
+        elif table:
+            hints["ranking"] = f"{len(table)} graczy"
         if mine is not None:
             accuracy = round(100 * mine.hits / mine.predictions) if mine.predictions else 0
             hints["profile"] = f"skuteczność {accuracy}% · dokładne wyniki: {mine.exact_hits}"

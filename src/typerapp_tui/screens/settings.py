@@ -114,8 +114,7 @@ class SettingsScreen(Screen[None]):
         controller = self.controller
         league = controller.league()
         where = f"{league[0]} {league[1]}" if league else "nie wybrano ligi"
-        provider = controller.provider
-        source = provider.name if getattr(provider, "online", False) else "ręcznie wpisywane"
+        source = controller.provider.name if controller.can_sync() else "ręcznie wpisywane"
         last = controller.last_sync()
         when = f"ostatnio {last.astimezone():%d.%m %H:%M}" if last else "jeszcze nie pobierano"
         self.query_one("#settings-source", Static).update(

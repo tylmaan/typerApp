@@ -94,6 +94,9 @@ class ApiResultsProvider:
         self._timeout = timeout
         self._client = client
 
+    def supports(self, league: str) -> bool:
+        return competition_code(league) is not None
+
     def fetch_matchday(self, league: str, season: str, number: int) -> list[FetchedMatch]:
         if not self.api_key:
             raise MissingApiKey(

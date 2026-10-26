@@ -67,6 +67,14 @@ class ResultsProvider(Protocol):
     #: False for sources that fetch nothing, so the app knows not to offer syncing.
     online: bool
 
+    def supports(self, league: str) -> bool:
+        """Whether this source has anything to say about that league.
+
+        Asked before every sync, so a league the source does not cover (the demo one, say)
+        never produces an error the player can do nothing about.
+        """
+        ...
+
     def fetch_matchday(self, league: str, season: str, number: int) -> list[FetchedMatch]:
         """Fixtures and, where known, results of one matchday.
 

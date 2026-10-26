@@ -327,3 +327,26 @@ def test_the_overall_ranking_counts_the_active_league_only(
 
     controller.set_league(DEMO_LEAGUE, "2026/27")
     assert max(entry.points for entry in controller.ranking()) > 0
+
+
+def test_a_source_only_syncs_the_leagues_it_covers(
+    repo: Repository, bus: EventBus, clock: Clock
+) -> None:
+    # The demo league has no fixtures in any API, so the app must not even try: the player
+    # was getting an error they could do nothing about on every start.
+    seed_demo_data(repo)
+    controller = TyperController(repo, bus, clock, FakeProvider())
+    controller.set_league(DEMO_LEAGUE, "2026/27")
+    controller.provider.supports = lambda league: league != DEMO_LEAGUE  # type: ignore[method-assign]
+
+    assert not controller.can_sync()
+    assert not controller.should_sync()
+
+    controller.set_league(*LEAGUE)
+    assert controller.can_sync()
+
+
+def test_the_manual_source_covers_nothing(repo: Repository, bus: EventBus, clock: Clock) -> None:
+    controller = make_controller(repo, bus, clock, ManualResultsProvider())
+    assert not controller.provider.supports(LEAGUE[0])
+    assert not controller.can_sync()

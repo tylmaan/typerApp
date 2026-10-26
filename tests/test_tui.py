@@ -942,3 +942,38 @@ def test_removing_the_demo_leaves_other_leagues_alone() -> None:
         repository.close()
 
     run(scenario)
+
+
+def test_the_menu_shows_only_your_own_standing() -> None:
+    async def scenario() -> None:
+        repository, app = build()
+        async with app.run_test():
+            screen = app.screen
+            assert isinstance(screen, MainMenuScreen)
+            hint = item_text(screen, "ranking")
+
+            # Kuba is second in the demo, so the leader used to be named here as well.
+            assert "miejsce" in hint and "pkt" in hint
+            assert "Ala" not in hint
+        repository.close()
+
+    run(scenario)
+
+
+def test_the_demo_league_does_not_try_to_fetch_anything() -> None:
+    async def scenario() -> None:
+        repository, app = build(provider=FakeProvider(current=8))
+        app.controller.provider.supports = lambda league: "demo" not in league  # type: ignore[method-assign]
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete()
+            assert not app.controller.can_sync()
+
+            await pilot.press("s")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            assert app.controller.last_sync() is None
+            assert app.screen.query(MatchRow) is not None  # the app is still usable
+        repository.close()
+
+    run(scenario)

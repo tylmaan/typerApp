@@ -352,8 +352,11 @@ class TyperController:
     # -------------------------------------------------------------------- sync
 
     def can_sync(self) -> bool:
-        """True when there is an online source and a league to ask about."""
-        return getattr(self.provider, "online", False) and self.league() is not None
+        """True when the source is online and actually covers the league that is active."""
+        league = self.league()
+        if league is None or not self.provider.online:
+            return False
+        return self.provider.supports(league[0])
 
     def last_sync(self) -> datetime | None:
         stored = self.repository.setting(LAST_SYNC)

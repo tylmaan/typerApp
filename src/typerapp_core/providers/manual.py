@@ -14,6 +14,10 @@ class ManualResultsProvider:
     name = "manual"
     online = False
 
+    def supports(self, league: str) -> bool:
+        del league
+        return False
+
     def fetch_matchday(self, league: str, season: str, number: int) -> list[FetchedMatch]:
         del league, season, number
         return []

@@ -51,10 +51,7 @@ class TyperApp(App[None]):
         them over to this thread, so the screens update themselves."""
         if not self.controller.can_sync():
             if not quiet:
-                self.notify(
-                    "Brak źródła wyników: ustaw klucz API w pliku .env i wybierz ligę",
-                    severity="warning",
-                )
+                self.notify(self._why_not(), severity="warning")
             return
         if not quiet:
             self.notify(f"Pobieram wyniki z {self.controller.provider.name}…")
@@ -64,6 +61,16 @@ class TyperApp(App[None]):
             exclusive=True,
             group="sync",
         )
+
+    def _why_not(self) -> str:
+        """Why nothing can be fetched right now, said in a way the player can act on."""
+        controller = self.controller
+        if not controller.provider.online:
+            return "Brak klucza API: wpisz FOOTBALL_DATA_API_KEY do pliku .env"
+        league = controller.league()
+        if league is None:
+            return "Najpierw wybierz ligę w Ustawieniach (L)"
+        return f"Liga {league[0]} nie ma wyników w API — wyniki wpisujesz sam klawiszem W"
 
     def _sync(self, force: bool, quiet: bool) -> None:
         """Runs off the UI thread: nothing here touches a widget directly."""

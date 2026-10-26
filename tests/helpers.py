@@ -68,6 +68,10 @@ class FakeProvider:
     name = "fake"
     online = True
 
+    def supports(self, league: str) -> bool:
+        del league
+        return True
+
     def __init__(
         self,
         matches: dict[int, list[FetchedMatch]] | None = None,
