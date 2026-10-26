@@ -8,9 +8,9 @@ import pytest
 SRC = Path(__file__).resolve().parents[1] / "src"
 
 FORBIDDEN_IMPORTS: dict[str, set[str]] = {
-    "typerek_core": {"textual", "PySide6", "typerek_tui", "typerek_gui"},
-    "typerek_tui": {"PySide6", "typerek_gui"},
-    "typerek_gui": {"textual", "typerek_tui"},
+    "typerapp_core": {"textual", "PySide6", "typerapp_tui", "typerapp_gui"},
+    "typerapp_tui": {"PySide6", "typerapp_gui"},
+    "typerapp_gui": {"textual", "typerapp_tui"},
 }
 
 

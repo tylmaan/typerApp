@@ -1,5 +1,5 @@
 def main() -> None:
-    print("Typerek (TUI) – w budowie.")
+    print("typerApp (TUI) – w budowie.")
 
 
 if __name__ == "__main__":
