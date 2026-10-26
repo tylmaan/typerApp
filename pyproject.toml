@@ -38,6 +38,10 @@ src = ["src", "tests"]
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM"]
 
+[tool.ruff.lint.isort]
+known-first-party = ["typerapp_core", "typerapp_tui", "typerapp_gui"]
+known-local-folder = ["helpers"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
