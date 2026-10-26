@@ -35,7 +35,7 @@ from typerapp_core.models import (
     ScoringRules,
     utc_now,
 )
-from typerapp_core.ranking import build_ranking
+from typerapp_core.ranking import PlayerStats, build_player_stats, build_ranking
 from typerapp_core.repository import (
     ACTIVE_LEAGUE,
     ACTIVE_PLAYER,
@@ -336,6 +336,19 @@ class TyperController:
 
     def player_entry(self, player_id: int) -> RankingEntry | None:
         return next((entry for entry in self.ranking() if entry.player_id == player_id), None)
+
+    def player_stats(self, player_id: int) -> PlayerStats | None:
+        """Everything the profile screen needs, including a line per matchday."""
+        entry = self.player_entry(player_id)
+        if entry is None:
+            return None
+        return build_player_stats(
+            entry,
+            self.repository.predictions(player_id=player_id),
+            self.repository.matches(),
+            self.matchdays(),
+            self.rules(),
+        )
 
     # ---------------------------------------------------------------- settings
 

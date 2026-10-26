@@ -1,7 +1,7 @@
-"""Leaderboard: turning predictions and results into a sorted table.
+"""Leaderboard and per-player statistics.
 
-The ranking is always computed, never stored, so changing the scoring rules in the settings
-screen immediately recalculates the whole table.
+Both are always computed, never stored, so changing the scoring rules in the settings screen
+immediately recalculates every number in the game.
 
 Ties are broken by the quality of the hits: more exact scores first, then more goal
 differences, then more outcomes. Players who are equal on all of those share a position.
@@ -13,7 +13,14 @@ from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 
-from typerapp_core.models import Match, Player, Prediction, RankingEntry, ScoringRules
+from typerapp_core.models import (
+    Match,
+    Matchday,
+    Player,
+    Prediction,
+    RankingEntry,
+    ScoringRules,
+)
 from typerapp_core.scoring import HitLevel, score_prediction, sweep_awarded
 
 
@@ -118,3 +125,109 @@ def build_ranking(
             )
         )
     return tuple(entries)
+
+
+@dataclass(frozen=True, slots=True)
+class MatchdayPoints:
+    """One line of the profile: how a player did in a single matchday."""
+
+    matchday: Matchday
+    points: int
+    predictions: int
+    joker_match_id: int | None
+    settled: int
+    matches: int
+
+    @property
+    def is_finished(self) -> bool:
+        return self.matches > 0 and self.settled == self.matches
+
+
+@dataclass(frozen=True, slots=True)
+class PlayerStats:
+    """Everything the profile screen shows, derived from the player's own predictions."""
+
+    entry: RankingEntry
+    jokers_played: int
+    jokers_hit: int
+    matchdays: tuple[MatchdayPoints, ...]
+
+    @property
+    def misses(self) -> int:
+        return self.entry.predictions - self.entry.hits
+
+    @property
+    def accuracy(self) -> int:
+        """Share of scored predictions that were worth at least an outcome, in percent."""
+        if not self.entry.predictions:
+            return 0
+        return round(100 * self.entry.hits / self.entry.predictions)
+
+    @property
+    def played_matchdays(self) -> int:
+        return sum(1 for row in self.matchdays if row.predictions)
+
+    @property
+    def average_points(self) -> float:
+        played = self.played_matchdays
+        return self.entry.points / played if played else 0.0
+
+
+def build_player_stats(
+    entry: RankingEntry,
+    predictions: Iterable[Prediction],
+    matches: Iterable[Match],
+    matchdays: Iterable[Matchday],
+    rules: ScoringRules,
+) -> PlayerStats:
+    """Statistics for one player. ``predictions`` are that player's own predictions only.
+
+    ``entry`` comes from the overall ranking, so the position and the points stay exactly
+    the ones shown in the leaderboard instead of being computed a second way.
+    """
+    predictions = list(predictions)
+    matches = list(matches)
+    by_id = {match.id: match for match in matches if match.id is not None}
+
+    jokers_played = 0
+    jokers_hit = 0
+    for prediction in predictions:
+        match = by_id.get(prediction.match_id)
+        if not prediction.joker or match is None or match.score is None or not match.is_settled:
+            continue
+        jokers_played += 1
+        if score_prediction(prediction, match.score, rules).is_hit:
+            jokers_hit += 1
+
+    rows: list[MatchdayPoints] = []
+    for matchday in matchdays:
+        day_matches = [match for match in matches if match.matchday_id == matchday.id]
+        day_ids = {match.id for match in day_matches}
+        day_predictions = [p for p in predictions if p.match_id in day_ids]
+
+        points = 0
+        for prediction in day_predictions:
+            match = by_id.get(prediction.match_id)
+            if match is not None and match.is_settled and match.score is not None:
+                points += score_prediction(prediction, match.score, rules).total
+        if sweep_awarded(day_predictions, day_matches, rules):
+            points += rules.matchday_sweep
+
+        joker = next((p for p in day_predictions if p.joker), None)
+        rows.append(
+            MatchdayPoints(
+                matchday=matchday,
+                points=points,
+                predictions=len(day_predictions),
+                joker_match_id=joker.match_id if joker else None,
+                settled=sum(1 for match in day_matches if match.is_settled),
+                matches=len(day_matches),
+            )
+        )
+
+    return PlayerStats(
+        entry=entry,
+        jokers_played=jokers_played,
+        jokers_hit=jokers_hit,
+        matchdays=tuple(rows),
+    )
