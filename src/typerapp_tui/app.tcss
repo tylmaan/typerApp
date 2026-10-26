@@ -1,0 +1,157 @@
+/* typerApp – dark theme with a pitch-green accent.
+   The same palette goes into the style guide of project 3. */
+
+$pitch: #2bb673;
+$pitch-dim: #1b6b45;
+$joker: #f2c744;
+$muted: #8b949e;
+
+Screen {
+    background: $surface;
+    color: $text;
+}
+
+#brand {
+    padding: 1 2 0 2;
+    color: $pitch;
+}
+
+#player-bar {
+    padding: 1 2;
+    color: $text;
+}
+
+#hints {
+    padding: 0 2 1 2;
+    color: $muted;
+}
+
+/* ------------------------------------------------------------------ main menu */
+
+#menu {
+    margin: 0 2;
+    background: $surface;
+    border: round $pitch-dim;
+    padding: 1 1;
+    height: auto;
+}
+
+#menu > ListItem {
+    padding: 0 1;
+    background: $surface;
+}
+
+#menu > ListItem.-highlight {
+    background: $pitch-dim;
+    color: $text;
+}
+
+#menu:focus > ListItem.-highlight {
+    background: $pitch;
+    color: $surface;
+    text-style: bold;
+}
+
+/* ------------------------------------------------------------- matchday screen */
+
+#matchday-title {
+    padding: 1 2 0 2;
+}
+
+#matchday-countdown {
+    padding: 0 2 1 2;
+    color: $joker;
+}
+
+#matches {
+    margin: 0 2;
+    border: round $pitch-dim;
+    height: auto;
+    max-height: 60%;
+}
+
+#matchday-summary {
+    padding: 1 2 0 2;
+    color: $muted;
+}
+
+MatchRow {
+    height: 1;
+    padding: 0 1;
+}
+
+MatchRow:focus {
+    background: $boost;
+}
+
+MatchRow > .matchrow--time {
+    color: $muted;
+}
+
+MatchRow > .matchrow--team {
+    color: $text;
+}
+
+MatchRow > .matchrow--field {
+    color: $text;
+    background: $panel;
+}
+
+MatchRow > .matchrow--field-active {
+    color: $surface;
+    background: $pitch;
+    text-style: bold;
+}
+
+MatchRow > .matchrow--joker {
+    color: $joker;
+    text-style: bold;
+}
+
+MatchRow > .matchrow--status {
+    color: $pitch;
+}
+
+MatchRow > .matchrow--points {
+    color: $joker;
+    text-style: bold;
+}
+
+/* -------------------------------------------------------------------- dialogs */
+
+PlayerPicker, NamePrompt {
+    align: center middle;
+}
+
+#dialog {
+    width: 46;
+    height: auto;
+    padding: 1 2;
+    background: $panel;
+    border: round $pitch;
+}
+
+.dialog-title {
+    padding-bottom: 1;
+    text-style: bold;
+}
+
+.dialog-hint {
+    padding-top: 1;
+    color: $muted;
+}
+
+#player-list {
+    height: auto;
+    max-height: 10;
+    background: $panel;
+}
+
+#player-list > ListItem {
+    background: $panel;
+}
+
+#player-list > ListItem.-highlight {
+    background: $pitch;
+    color: $surface;
+}

@@ -87,7 +87,7 @@ def seed_demo_data(
         _fixtures(
             played.id,  # type: ignore[arg-type]
             PLAYED_FIXTURES,
-            first_kickoff=now - timedelta(days=5),
+            first_kickoff=_kickoff_day(now, -5),
             status=MatchStatus.FINISHED,
             results=PLAYED_RESULTS,
         )
@@ -96,7 +96,7 @@ def seed_demo_data(
         _fixtures(
             open_matchday.id,  # type: ignore[arg-type]
             OPEN_FIXTURES,
-            first_kickoff=now + timedelta(days=2),
+            first_kickoff=_kickoff_day(now, 2),
             status=MatchStatus.SCHEDULED,
         )
     )
@@ -109,6 +109,11 @@ def seed_demo_data(
     repository.set_setting(ACTIVE_LEAGUE, LEAGUE)
     repository.set_setting(ACTIVE_SEASON, SEASON)
     repository.set_setting(ACTIVE_PLAYER, players[PLAYER_NAMES[0]].id)
+
+
+def _kickoff_day(now: datetime, days: int) -> datetime:
+    """A round kickoff time, because real fixtures do not start at 16:36."""
+    return (now + timedelta(days=days)).replace(hour=16, minute=0, second=0, microsecond=0)
 
 
 def _fixtures(
