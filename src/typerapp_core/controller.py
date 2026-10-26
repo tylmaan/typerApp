@@ -12,6 +12,7 @@ from an injected clock, so tests can stand a minute before a deadline without wa
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
+from dataclasses import replace
 from datetime import datetime, timedelta
 
 from typerapp_core.events import (
@@ -23,6 +24,9 @@ from typerapp_core.events import (
     RankingChanged,
     ResultsUpdated,
     SettingsChanged,
+    SyncFailed,
+    SyncFinished,
+    SyncStarted,
 )
 from typerapp_core.models import (
     Match,
@@ -35,11 +39,14 @@ from typerapp_core.models import (
     ScoringRules,
     utc_now,
 )
+from typerapp_core.providers.base import FetchedMatch, ProviderError, ResultsProvider
+from typerapp_core.providers.manual import ManualResultsProvider
 from typerapp_core.ranking import PlayerStats, build_player_stats, build_ranking
 from typerapp_core.repository import (
     ACTIVE_LEAGUE,
     ACTIVE_PLAYER,
     ACTIVE_SEASON,
+    LAST_SYNC,
     Repository,
 )
 from typerapp_core.scoring import (
@@ -52,6 +59,16 @@ from typerapp_core.scoring import (
     score_prediction,
 )
 
+#: How stale the cache has to be before the app syncs on its own. The free plan allows about
+#: ten requests a minute, so this is deliberately generous.
+MIN_SYNC_INTERVAL = timedelta(minutes=5)
+
+
+def season_for(moment: datetime) -> str:
+    """The football season a date belongs to, written the way people write it: ``2026/27``."""
+    year = moment.year if moment.month >= 7 else moment.year - 1
+    return f"{year}/{(year + 1) % 100:02d}"
+
 
 class TyperController:
     """Game logic as the views see it."""
@@ -61,10 +78,12 @@ class TyperController:
         repository: Repository,
         events: EventBus,
         clock: Callable[[], datetime] = utc_now,
+        provider: ResultsProvider | None = None,
     ) -> None:
         self.repository = repository
         self.events = events
         self.clock = clock
+        self.provider: ResultsProvider = provider or ManualResultsProvider()
         self._rules: ScoringRules | None = None
         #: Last published ranking per view (``None`` key is the overall one), for animations.
         self._last_ranking: dict[int | None, tuple[RankingEntry, ...]] = {}
@@ -296,20 +315,125 @@ class TyperController:
 
         awarded: dict[int, PointsBreakdown] = {}
         if score is not None and status is MatchStatus.FINISHED:
-            rules = self.rules()
-            for prediction in self.repository.predictions(matchday_id=match.matchday_id):
-                if prediction.match_id == match_id:
-                    awarded[prediction.player_id] = score_prediction(prediction, score, rules)
-            self.events.publish(
-                PointsAwarded(
-                    match_id=match_id,
-                    points=tuple(
-                        (player_id, breakdown.total) for player_id, breakdown in awarded.items()
-                    ),
-                )
-            )
+            awarded = self._award(replace(match, status=status, score=score))
         self.refresh_ranking()
         return awarded
+
+    def _award(self, match: Match) -> dict[int, PointsBreakdown]:
+        """Score every prediction for a match that just got its result."""
+        if match.score is None or match.id is None:
+            return {}
+        rules = self.rules()
+        awarded = {
+            prediction.player_id: score_prediction(prediction, match.score, rules)
+            for prediction in self.repository.predictions(matchday_id=match.matchday_id)
+            if prediction.match_id == match.id
+        }
+        self.events.publish(
+            PointsAwarded(
+                match_id=match.id,
+                points=tuple(
+                    (player_id, breakdown.total) for player_id, breakdown in awarded.items()
+                ),
+            )
+        )
+        return awarded
+
+    # -------------------------------------------------------------------- sync
+
+    def can_sync(self) -> bool:
+        """True when there is an online source and a league to ask about."""
+        return getattr(self.provider, "online", False) and self.league() is not None
+
+    def last_sync(self) -> datetime | None:
+        stored = self.repository.setting(LAST_SYNC)
+        if not stored:
+            return None
+        try:
+            return datetime.fromisoformat(stored)
+        except ValueError:
+            return None
+
+    def should_sync(self) -> bool:
+        """Whether the cache is stale enough to ask the source again on start-up."""
+        if not self.can_sync():
+            return False
+        last = self.last_sync()
+        return last is None or self.now() - last >= MIN_SYNC_INTERVAL
+
+    def sync(self, *, force: bool = True) -> int:
+        """Fetch the current and the previous matchday, award points, refresh the ranking.
+
+        Returns the number of matches that actually changed. Raises
+        :class:`~typerapp_core.providers.base.ProviderError` on failure, after announcing it
+        with :class:`~typerapp_core.events.SyncFailed`.
+        """
+        league = self.league()
+        if league is None:
+            raise ProviderError("No league selected")
+        if not force and not self.should_sync():
+            return 0
+
+        source = self.provider.name
+        self.events.publish(SyncStarted(source=source))
+        changed = 0
+        try:
+            for number in self._sync_targets(league):
+                matchday = self.repository.upsert_matchday(
+                    Matchday(league=league[0], season=league[1], number=number)
+                )
+                fetched = self.provider.fetch_matchday(league[0], league[1], number)
+                changed += self._store_fetched(matchday.id, fetched)  # type: ignore[arg-type]
+        except ProviderError as error:
+            self.events.publish(SyncFailed(source=source, message=str(error)))
+            raise
+
+        self.repository.set_setting(LAST_SYNC, self.now().isoformat())
+        self.events.publish(SyncFinished(source=source, updated_matches=changed))
+        return changed
+
+    def _sync_targets(self, league: tuple[str, str]) -> list[int]:
+        """The current matchday and the one before it, so finished games are filled in too.
+
+        The source is asked first, and only then our own data. The other way round the demo
+        seed would decide what to fetch, and real fixtures would be merged into demo
+        matchdays that happen to carry the same number.
+        """
+        number = self.provider.current_matchday(*league)
+        if not number:
+            current = self.current_matchday()
+            number = current.number if current else None
+        if not number:
+            return []
+        return [number - 1, number] if number > 1 else [number]
+
+    def _store_fetched(self, matchday_id: int, fetched: Iterable[FetchedMatch]) -> int:
+        before = {match.id: match for match in self.repository.matches(matchday_id)}
+        stored = self.repository.upsert_matches([entry.to_match(matchday_id) for entry in fetched])
+
+        changed = 0
+        settled: list[Match] = []
+        for match in stored:
+            previous = before.get(match.id)
+            if previous is None or (
+                previous.status,
+                previous.score,
+                previous.kickoff,
+            ) != (match.status, match.score, match.kickoff):
+                changed += 1
+            if match.is_settled and (previous is None or not previous.is_settled):
+                settled.append(match)
+
+        if changed:
+            self.events.publish(MatchesUpdated(matchday_id=matchday_id))
+        for match in settled:
+            self._award(match)
+        if settled:
+            self.events.publish(
+                ResultsUpdated(match_ids=tuple(match.id for match in settled))  # type: ignore[misc]
+            )
+            self.refresh_ranking()
+        return changed
 
     # ----------------------------------------------------------------- ranking
 

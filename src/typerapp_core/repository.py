@@ -44,6 +44,7 @@ DATABASE_FILE_NAME = "typerapp.db"
 ACTIVE_PLAYER = "active_player_id"
 ACTIVE_LEAGUE = "active_league"
 ACTIVE_SEASON = "active_season"
+LAST_SYNC = "last_sync_at"
 
 #: Scoring rules live in the settings table under this prefix, one row per field.
 RULES_PREFIX = "rules."

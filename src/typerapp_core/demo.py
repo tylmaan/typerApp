@@ -21,7 +21,9 @@ from typerapp_core.repository import (
     Repository,
 )
 
-LEAGUE = "Premier League"
+#: Deliberately not the name of a real competition: the demo must never share a matchday
+#: with fixtures fetched from the API, or the two sets of matches end up in one list.
+LEAGUE = "Premier League (demo)"
 SEASON = "2026/27"
 
 PLAYER_NAMES = ("Kuba", "Ala", "Bartek", "Celina", "Darek")

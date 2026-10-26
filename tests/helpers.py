@@ -3,6 +3,7 @@
 from datetime import UTC, datetime, timedelta
 
 from typerapp_core.models import Match, MatchStatus, Player, Prediction, Score
+from typerapp_core.providers.base import FetchedMatch
 
 #: Saturday 18:00 UTC, the first kickoff of the test matchday.
 FIRST_KICKOFF = datetime(2026, 11, 7, 18, 0, tzinfo=UTC)
@@ -59,3 +60,50 @@ def predict(
 
 def player(player_id: int, name: str) -> Player:
     return Player(name=name, id=player_id)
+
+
+class FakeProvider:
+    """An online source the tests drive: it answers with whatever it was given."""
+
+    name = "fake"
+    online = True
+
+    def __init__(
+        self,
+        matches: dict[int, list[FetchedMatch]] | None = None,
+        *,
+        current: int | None = 12,
+        error: Exception | None = None,
+    ) -> None:
+        self.matches = matches or {}
+        self.current = current
+        self.error = error
+        self.asked: list[int] = []
+
+    def fetch_matchday(self, league: str, season: str, number: int) -> list[FetchedMatch]:
+        if self.error:
+            raise self.error
+        self.asked.append(number)
+        return self.matches.get(number, [])
+
+    def current_matchday(self, league: str, season: str) -> int | None:
+        return self.current
+
+
+def fetched(
+    home: str = "Arsenal",
+    away: str = "Chelsea",
+    *,
+    status: MatchStatus = MatchStatus.SCHEDULED,
+    score: Score | None = None,
+    external_id: str = "1",
+    kickoff: datetime | None = None,
+) -> FetchedMatch:
+    return FetchedMatch(
+        home_team=home,
+        away_team=away,
+        kickoff=kickoff or FIRST_KICKOFF,
+        status=status,
+        score=score,
+        external_id=external_id,
+    )
