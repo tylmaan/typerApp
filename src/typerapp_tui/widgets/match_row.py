@@ -14,6 +14,7 @@ from rich.text import Text
 from textual import events
 from textual.message import Message
 from textual.reactive import reactive
+from textual.timer import Timer
 from textual.widget import Widget
 
 from typerapp_core.models import Match, Prediction
@@ -25,6 +26,16 @@ HOME, AWAY = 0, 1
 MAX_GOALS = 19
 
 TEAM_WIDTH = 15
+TIME_WIDTH = 13
+FIELD_WIDTH = 3
+
+#: Where the home field starts in the rendered line, used to turn a click into a field.
+HOME_FIELD_COLUMN = TIME_WIDTH + 1 + TEAM_WIDTH + 1
+AWAY_FIELD_COLUMN = HOME_FIELD_COLUMN + FIELD_WIDTH + 1
+
+#: How long the points take to count up after a match is settled.
+COUNT_DURATION = 0.45
+COUNT_STEPS = 10
 
 
 class MatchRow(Widget):
@@ -45,6 +56,7 @@ class MatchRow(Widget):
     away: reactive[int | None] = reactive(None)
     joker: reactive[bool] = reactive(False)
     saved: reactive[bool] = reactive(False)
+    points: reactive[int | None] = reactive(None)
 
     class ScoreEntered(Message):
         """The row holds a complete score that the screen should save."""
@@ -68,11 +80,19 @@ class MatchRow(Widget):
         self.match_id: int = match.id or 0
         self.editable = editable
         self.points = points
+        self._target_points = points or 0
+        self._counter: Timer | None = None
         if prediction is not None:
             self.home = prediction.home_goals
             self.away = prediction.away_goals
             self.joker = prediction.joker
             self.saved = True
+
+    def update_match(self, match: Match, *, editable: bool) -> None:
+        """A result arrived: the same row, new status and a new score."""
+        self.match = match
+        self.editable = editable
+        self.refresh()
 
     def apply(self, prediction: Prediction) -> None:
         """Take over what the core stored, after the controller confirmed a save."""
@@ -80,6 +100,30 @@ class MatchRow(Widget):
         self.away = prediction.away_goals
         self.joker = prediction.joker
         self.saved = True
+
+    def award(self, total: int) -> None:
+        """Count the points up from zero, so they look like they are landing on the row."""
+        self.flash()
+        if self._counter is not None:
+            self._counter.stop()
+        self._target_points = total
+        if total <= 0:
+            self.points = total
+            return
+        self.points = 0
+        self._counter = self.set_interval(COUNT_DURATION / COUNT_STEPS, self._count_up)
+
+    def _count_up(self) -> None:
+        step = max(1, round(self._target_points / COUNT_STEPS))
+        self.points = min(self._target_points, (self.points or 0) + step)
+        if self.points >= self._target_points and self._counter is not None:
+            self._counter.stop()
+            self._counter = None
+
+    def flash(self) -> None:
+        """Fade the row in, so a result arriving from the sync catches the eye."""
+        self.styles.opacity = 0.2
+        self.styles.animate("opacity", value=1.0, duration=0.4, easing="out_cubic")
 
     def clear(self) -> None:
         """Empty the row, used when another player takes the seat."""
@@ -97,7 +141,7 @@ class MatchRow(Widget):
         team_style = self.get_component_rich_style("matchrow--team")
 
         row = Text(no_wrap=True, overflow="crop")
-        row.append(f"{format_kickoff(self.match.kickoff):<13} ", time_style)
+        row.append(f"{format_kickoff(self.match.kickoff):<{TIME_WIDTH}} ", time_style)
         row.append(f"{_clip(self.match.home_team):>{TEAM_WIDTH}} ", team_style)
         row.append_text(self._field(HOME))
         row.append(":", team_style)
@@ -112,7 +156,7 @@ class MatchRow(Widget):
         style = self.get_component_rich_style(
             "matchrow--field-active" if active else "matchrow--field"
         )
-        return Text(f"{'·' if value is None else value:^3}", style=style)
+        return Text(f"{'·' if value is None else value:^{FIELD_WIDTH}}", style=style)
 
     def _trailing(self) -> Text:
         if self.match.is_settled and self.match.score is not None:
@@ -133,6 +177,14 @@ class MatchRow(Widget):
         elif not self.editable:
             trailing.append("  zamknięte", self.get_component_rich_style("matchrow--status"))
         return trailing
+
+    def on_click(self, event: events.Click) -> None:
+        """Clicking a score field puts the cursor there, so the mouse works too."""
+        self.focus()
+        if not self.editable:
+            return
+        column = event.offset.x - self.styles.padding.left
+        self.field = AWAY if column >= AWAY_FIELD_COLUMN else HOME
 
     def on_focus(self) -> None:
         self.refresh()  # the active field is drawn only on the focused row

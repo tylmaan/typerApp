@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from datetime import timedelta
 
 import pytest
 from textual.widgets import Label, ListItem, ListView
@@ -27,7 +28,7 @@ from typerapp_tui.screens.matchday import MatchdayScreen
 from typerapp_tui.screens.profile import ProfileScreen
 from typerapp_tui.screens.ranking import RankingScreen
 from typerapp_tui.screens.settings import SettingsScreen
-from typerapp_tui.widgets.match_row import MatchRow
+from typerapp_tui.widgets.match_row import AWAY_FIELD_COLUMN, HOME_FIELD_COLUMN, MatchRow
 from typerapp_tui.widgets.ranking_row import RankingRow
 from typerapp_tui.widgets.setting_row import SettingRow
 
@@ -926,7 +927,8 @@ def test_removing_the_demo_leaves_other_leagues_alone() -> None:
         async with app.run_test() as pilot:
             app.controller.set_league("Premier League", "2026/27")
             app.controller.sync()
-            own = app.controller.add_player("Marek")
+            app.controller.add_player("Marek")
+            app.controller.set_league(DEMO_LEAGUE, "2026/27")
             await pilot.pause()
 
             await pilot.press("down", "down", "down", "enter")
@@ -937,8 +939,32 @@ def test_removing_the_demo_leaves_other_leagues_alone() -> None:
             await pilot.pause()
 
             assert [p.name for p in app.controller.players()] == ["Marek"]
-            assert app.controller.active_player() == own
+            assert app.controller.active_player().name == "Marek"  # type: ignore[union-attr]
+            assert app.controller.league() == ("Premier League", "2026/27")
             assert [d.number for d in app.controller.matchdays()] == [8]
+        repository.close()
+
+    run(scenario)
+
+
+def test_a_fetched_league_can_be_cleared_without_touching_the_players() -> None:
+    async def scenario() -> None:
+        provider = FakeProvider({8: [fetched()]}, current=8)
+        repository, app = build(provider=provider)
+        async with app.run_test() as pilot:
+            app.controller.set_league("Premier League", "2026/27")
+            app.controller.sync()
+            await pilot.pause()
+
+            await pilot.press("down", "down", "down", "enter")
+            await pilot.pause()
+            await pilot.press("d")
+            await pilot.pause()
+            await pilot.click("#yes")
+            await pilot.pause()
+
+            assert app.controller.known_leagues() == [(DEMO_LEAGUE, "2026/27")]
+            assert len(app.controller.players()) == 5  # the demo players are untouched
         repository.close()
 
     run(scenario)
@@ -974,6 +1000,90 @@ def test_the_demo_league_does_not_try_to_fetch_anything() -> None:
 
             assert app.controller.last_sync() is None
             assert app.screen.query(MatchRow) is not None  # the app is still usable
+        repository.close()
+
+    run(scenario)
+
+
+def test_points_count_up_when_a_result_lands() -> None:
+    async def scenario() -> None:
+        repository, app = build()
+        async with app.run_test() as pilot:
+            await pilot.press("enter")
+            await pilot.pause()
+            row = app.screen.focused
+            assert isinstance(row, MatchRow)
+            await pilot.press("2", "1")  # exact score, worth seven points
+            await pilot.pause()
+
+            await pilot.press("w")
+            await pilot.pause()
+            await pilot.press("2", ":", "1", "enter")
+            await pilot.pause()
+
+            assert row.points == 7  # the row ends up showing what the prediction was worth
+
+            # The counting itself: it starts at zero and climbs there on a timer.
+            row.award(7)
+            assert row.points == 0
+            for _ in range(40):
+                await pilot.pause()
+                if row.points == 7:
+                    break
+            assert row.points == 7
+        repository.close()
+
+    run(scenario)
+
+
+def test_the_countdown_gets_louder_near_the_deadline() -> None:
+    async def scenario() -> None:
+        repository, app = build()
+        async with app.run_test() as pilot:
+            await pilot.press("enter")
+            await pilot.pause()
+            countdown = app.screen.query_one("#matchday-countdown")
+            assert not countdown.has_class("-soon")
+
+            deadline = app.controller.deadline(app.screen.matchday_id)
+            app.controller.clock = lambda: deadline - timedelta(minutes=30)
+            app.screen._refresh_countdown()
+            assert countdown.has_class("-soon") and not countdown.has_class("-urgent")
+
+            app.controller.clock = lambda: deadline - timedelta(minutes=2)
+            app.screen._refresh_countdown()
+            assert countdown.has_class("-urgent")
+        repository.close()
+
+    run(scenario)
+
+
+def test_clicking_a_score_field_selects_it() -> None:
+    async def scenario() -> None:
+        repository, app = build()
+        async with app.run_test() as pilot:
+            await pilot.press("enter")
+            await pilot.pause()
+            row = app.screen.query(MatchRow).first()
+
+            await pilot.click(row, offset=(AWAY_FIELD_COLUMN + 2, 0))
+            await pilot.pause()
+            assert row.has_focus and row.field == 1
+
+            await pilot.click(row, offset=(HOME_FIELD_COLUMN + 1, 0))
+            await pilot.pause()
+            assert row.field == 0
+        repository.close()
+
+    run(scenario)
+
+
+def test_the_menu_shows_a_logo() -> None:
+    async def scenario() -> None:
+        repository, app = build()
+        async with app.run_test():
+            logo = str(app.screen.query_one("#logo").content)
+            assert logo.count("\n") == 2  # three lines, whatever they draw
         repository.close()
 
     run(scenario)

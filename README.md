@@ -1,9 +1,11 @@
 # typerApp
 
-A football score prediction game for a group of friends. Players predict the results of
-upcoming league matches; the app fetches real results from the
-[football-data.org](https://www.football-data.org/) API (or accepts them entered by hand),
+A football score prediction game for a group of friends, played at one keyboard. Players
+predict the results of upcoming league matches; the app fetches the real ones from the
+[football-data.org](https://www.football-data.org/) API (or takes them typed in by hand),
 awards points and keeps a leaderboard.
+
+![Main menu](docs/screenshots/menu.svg)
 
 The project is built in stages for a Human–Computer Interaction university course:
 
@@ -14,34 +16,55 @@ The project is built in stages for a Human–Computer Interaction university cou
 | 3 | Specification and Figma prototype | `docs/` | – |
 
 The shared core (domain model, scoring, ranking, storage, controller) lives in
-`src/typerapp_core` and does not depend on any UI library, so moving from the terminal UI
-to the desktop GUI only means adding a new presentation layer.
+`src/typerapp_core` and does not depend on any UI library, so the desktop version is a new
+presentation layer rather than a rewrite. A test guards that boundary.
 
-## Requirements
+## Predicting
 
-- Python 3.12+
-- [uv](https://docs.astral.sh/uv/)
+![Matchday](docs/screenshots/kolejka.svg)
+
+There is no edit mode: the arrows pick the match and the field, digits fill the score, and a
+match takes two keystrokes because the first digit jumps to the away field. Predictions save
+themselves. `J` places the joker, which doubles everything that match pays out, and it can be
+moved around until the matchday closes — five minutes before its first kickoff by default.
+
+## Scoring
+
+| | Points |
+|---|---|
+| Exact score | 5 |
+| Right goal difference | 3 |
+| Right winner or a draw | 2 |
+| Both teams scored, guessed correctly | +1 |
+| Right number of goals in the match | +1 |
+| Every result of the matchday guessed | +5 |
+| Joker | the match total ×2 |
+
+Every number is editable in the settings, and setting one to zero switches that reward off.
+The leaderboard is always recomputed, so changing the rules immediately reshuffles it.
+
+![Ranking](docs/screenshots/ranking.svg)
 
 ## Running
 
 ```bash
-uv sync                           # install dependencies
-uv run python -m typerapp_tui      # terminal version
+uv sync
+uv run python -m typerapp_tui
 ```
 
-## Results
+Copy `.env.example` to `.env` and paste a football-data.org key into it. The free plan covers
+a dozen competitions and allows about ten requests a minute, so the app fetches three
+matchdays at a time and caches everything in SQLite.
 
-Copy `.env.example` to `.env` and paste a [football-data.org](https://www.football-data.org/)
-key into it. The free plan covers a dozen competitions (Premier League, Bundesliga, La Liga,
-Serie A and so on) and allows about ten requests a minute, so the app fetches one matchday at
-a time and caches everything in SQLite.
-
-- `S` fetches the current and the previous matchday; the app also does it on start-up when
-  the cache is older than five minutes.
+- `S` fetches the previous, the current and the next matchday; the app also does it on
+  start-up when the cache is older than five minutes.
 - `W` types a result in by hand, which is how the app works with no key and no network.
-- `L` in the settings picks the league.
+- `L` picks the league, `D` clears the data of the one that is active.
 
-Without a key the app still runs: cached data, manually entered results and the demo seed.
+Without a key the app still runs on cached data, hand-typed results and the demo seed, which
+fills an empty database with two matchdays and five players.
+
+![Settings](docs/screenshots/ustawienia.svg)
 
 ## Development
 
@@ -50,3 +73,7 @@ uv run pytest
 uv run ruff check .
 uv run ruff format .
 ```
+
+The tests cover the core (scoring, ranking, storage, synchronisation) and drive the interface
+itself through Textual's `Pilot`, pressing real keys against a real app on an in-memory
+database. The API client is tested against a recorded answer, so nothing touches the network.

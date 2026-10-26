@@ -33,6 +33,15 @@ if TYPE_CHECKING:
     from typerapp_core.controller import TyperController
     from typerapp_tui.app import TyperApp
 
+#: Drawn with box characters rather than letters, so it stays three lines tall.
+LOGO = "\n".join(
+    (
+        "╔╦╗┬ ┬┌─┐┌─┐┬─┐╔═╗┌─┐┌─┐",
+        " ║ └┬┘├─┘├┤ ├┬┘╠═╣├─┘├─┘",
+        " ╩  ┴ ┴  └─┘┴└─╩ ╩┴  ┴  ",
+    )
+)
+
 
 class MainMenuScreen(Screen[None]):
     BINDINGS = [
@@ -54,6 +63,7 @@ class MainMenuScreen(Screen[None]):
         return cast("TyperApp", self.app).controller
 
     def compose(self) -> ComposeResult:
+        yield Static(LOGO, id="logo")
         yield Static(id="brand")
         yield Static(id="player-bar")
         yield ListView(id="menu")
@@ -120,7 +130,9 @@ class MainMenuScreen(Screen[None]):
     def _refresh_brand(self) -> None:
         league = self.controller.league()
         where = f"{league[0]} {league[1]}" if league else "brak ligi"
-        self.query_one("#brand", Static).update(f"[b]typerApp[/b]   [dim]{escape(where)}[/dim]")
+        self.query_one("#brand", Static).update(
+            f"[dim]typowanie wyników w gronie znajomych ·[/dim] [b]{escape(where)}[/b]"
+        )
 
     def _refresh_player(self) -> None:
         player = self.controller.active_player()

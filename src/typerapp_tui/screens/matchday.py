@@ -6,6 +6,7 @@ When the controller confirms a save, the event comes back and exactly one row is
 
 from __future__ import annotations
 
+from datetime import timedelta
 from functools import partial
 from typing import TYPE_CHECKING, cast
 
@@ -19,6 +20,7 @@ from textual.widgets import Footer, Static
 from typerapp_core.events import (
     ActivePlayerChanged,
     MatchesUpdated,
+    PointsAwarded,
     PredictionSaved,
     ResultsUpdated,
 )
@@ -31,6 +33,11 @@ from typerapp_tui.widgets.match_row import MatchRow
 if TYPE_CHECKING:
     from typerapp_core.controller import TyperController
     from typerapp_tui.app import TyperApp
+
+
+#: When the countdown starts to look worried, and when it starts to pulse.
+SOON = timedelta(hours=1)
+URGENT = timedelta(minutes=5)
 
 
 class MatchdayScreen(Screen[None]):
@@ -56,6 +63,8 @@ class MatchdayScreen(Screen[None]):
         self._cancels: list = []
         #: Every matchday of the league, so the player can walk through them.
         self._matchdays: list = []
+        #: Points waiting to be counted up on a row, once that row exists.
+        self._pending_award: tuple[int, int] | None = None
 
     @property
     def controller(self) -> TyperController:
@@ -112,7 +121,8 @@ class MatchdayScreen(Screen[None]):
         self._cancels = [
             bridge.subscribe(PredictionSaved, self._on_prediction_saved),
             bridge.subscribe(ActivePlayerChanged, lambda _: self._reload_predictions()),
-            bridge.subscribe(ResultsUpdated, lambda _: self._rebuild_rows()),
+            bridge.subscribe(ResultsUpdated, self._on_results),
+            bridge.subscribe(PointsAwarded, self._on_points_awarded),
             bridge.subscribe(MatchesUpdated, self._on_matches_updated),
         ]
         self.set_interval(1.0, self._refresh_countdown)
@@ -129,9 +139,9 @@ class MatchdayScreen(Screen[None]):
 
     def _refresh_title(self) -> None:
         controller = self.controller
-        matchday = controller.repository.matchday(self.matchday_id)
+        matchday = controller.matchday(self.matchday_id)
         player_id = self.player_id
-        player = controller.repository.player(player_id) if player_id is not None else None
+        player = controller.player(player_id) if player_id is not None else None
         number = matchday.number if matchday else "?"
         who = escape(player.name) if player else "brak gracza"
         label = "typy" if self.is_own_matchday else "typy gracza"
@@ -144,16 +154,31 @@ class MatchdayScreen(Screen[None]):
         )
 
     def _refresh_countdown(self) -> None:
+        """Runs every second: the closer the deadline, the louder the line gets."""
         controller = self.controller
-        if controller.is_open(self.matchday_id):
-            left = format_countdown(controller.time_left(self.matchday_id))
-            text = f"zamknięcie typowania za [b]{left}[/b]"
+        countdown = self.query_one("#matchday-countdown", Static)
+        left = controller.time_left(self.matchday_id)
+        if controller.is_open(self.matchday_id) and left is not None:
+            countdown.update(f"zamknięcie typowania za [b]{format_countdown(left)}[/b]")
+            soon = left <= SOON
+            urgent = left <= URGENT
         else:
-            text = "[b]typowanie zamknięte[/b]"
-        self.query_one("#matchday-countdown", Static).update(text)
+            countdown.update("[b]typowanie zamknięte[/b]")
+            soon = urgent = False
+
+        countdown.set_class(soon and not urgent, "-soon")
+        countdown.set_class(urgent, "-urgent")
+        if urgent:
+            countdown.styles.opacity = 0.45
+            countdown.styles.animate("opacity", value=1.0, duration=0.8)
 
     def _refresh_summary(self) -> None:
         rows = list(self.query(MatchRow))
+        if not rows:
+            self.query_one("#matchday-summary", Static).update(
+                "Brak meczów w tej kolejce · pobierz wyniki klawiszem S"
+            )
+            return
         filled = sum(1 for row in rows if row.saved)
         summary = f"Wytypowano {filled} z {plural_matches(len(rows))}"
         joker = next((row for row in rows if row.joker), None)
@@ -177,6 +202,41 @@ class MatchdayScreen(Screen[None]):
         if event.matchday_id == self.matchday_id:
             self._rebuild_rows()
 
+    def _on_results(self, event: ResultsUpdated) -> None:
+        """Results changed on matches already on screen: same rows, new content."""
+        editable = self.controller.is_open(self.matchday_id) and self.is_own_matchday
+        touched = False
+        for row in self.query(MatchRow):
+            if row.match_id not in event.match_ids:
+                continue
+            match = self.controller.match(row.match_id)
+            if match is None:
+                continue
+            row.update_match(match, editable=editable and match.status is MatchStatus.SCHEDULED)
+            row.flash()
+            touched = True
+        if touched:
+            self._refresh_summary()
+
+    def _on_points_awarded(self, event: PointsAwarded) -> None:
+        """Remember what the player scored and let the row count it up."""
+        player_id = self.player_id
+        total = dict(event.points).get(player_id) if player_id is not None else None
+        if total is None:
+            return
+        self._pending_award = (event.match_id, total)
+        self._award_points()
+
+    def _award_points(self) -> None:
+        if self._pending_award is None:
+            return
+        match_id, total = self._pending_award
+        for row in self.query(MatchRow):
+            if row.match_id == match_id:
+                self._pending_award = None
+                row.award(total)
+                return
+
     def _rebuild_rows(self) -> None:
         """A sync can add matches, move kickoffs or settle games, so the rows are rebuilt."""
         self.run_worker(self._mount_rows(), exclusive=True, group="rows")
@@ -188,6 +248,7 @@ class MatchdayScreen(Screen[None]):
         self._refresh_title()
         self._refresh_countdown()
         self._refresh_summary()
+        self._award_points()
         self._focus_first_gap()
 
     def _on_prediction_saved(self, event: PredictionSaved) -> None:

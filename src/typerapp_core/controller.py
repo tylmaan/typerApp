@@ -96,6 +96,9 @@ class TyperController:
     def players(self) -> list[Player]:
         return self.repository.players()
 
+    def player(self, player_id: int) -> Player | None:
+        return self.repository.player(player_id)
+
     def active_player(self) -> Player | None:
         """The player holding the keyboard right now. Falls back to the first one."""
         stored = self.repository.setting(ACTIVE_PLAYER)
@@ -203,6 +206,12 @@ class TyperController:
 
     def matches(self, matchday_id: int) -> list[Match]:
         return self.repository.matches(matchday_id)
+
+    def match(self, match_id: int) -> Match | None:
+        return self.repository.match(match_id)
+
+    def matchday(self, matchday_id: int) -> Matchday | None:
+        return self.repository.matchday(matchday_id)
 
     def deadline(self, matchday_id: int) -> datetime | None:
         return matchday_deadline(self.matches(matchday_id), self.rules())
@@ -541,6 +550,28 @@ class TyperController:
         self.events.publish(ActivePlayerChanged(player=self.active_player()))
         self.refresh_ranking()
 
+    def remove_league(self, league: str, season: str) -> int:
+        """Drop everything stored for one league: matchdays, matches and predictions."""
+        matchdays = self.repository.matchdays(league, season)
+        for matchday in matchdays:
+            self.repository.delete_matchday(matchday.id)  # type: ignore[arg-type]
+
+        self._reselect_league()
+        self.refresh_ranking()
+        return len(matchdays)
+
+    def _reselect_league(self) -> None:
+        """After data was deleted: keep a league that still has something in it."""
+        remaining = self.known_leagues()
+        if self.league() in remaining:
+            return
+        if remaining:
+            self.set_league(*remaining[0])
+            return
+        self.repository.set_setting(ACTIVE_LEAGUE, None)
+        self.repository.set_setting(ACTIVE_SEASON, None)
+        self.events.publish(SettingsChanged(key=ACTIVE_LEAGUE, value=None))
+
     def has_demo_data(self) -> bool:
         from typerapp_core.demo import LEAGUE, PLAYER_NAMES, SEASON
 
@@ -553,12 +584,7 @@ class TyperController:
         from typerapp_core.demo import remove_demo_data
 
         removed = remove_demo_data(self.repository)
-
-        active = self.league()
-        if active is not None and active not in self.known_leagues():
-            self.repository.set_setting(ACTIVE_LEAGUE, None)
-            self.repository.set_setting(ACTIVE_SEASON, None)
-            self.events.publish(SettingsChanged(key=ACTIVE_LEAGUE, value=None))
+        self._reselect_league()
 
         stored = self.repository.setting(ACTIVE_PLAYER)
         if stored is None or self.repository.player(int(stored)) is None:

@@ -57,7 +57,7 @@ class SettingsScreen(Screen[None]):
         Binding("a", "add_player", "Dodaj gracza"),
         Binding("u", "delete_player", "Usuń gracza"),
         Binding("l", "pick_league", "Liga"),
-        Binding("d", "remove_demo", "Usuń demo"),
+        Binding("d", "remove_league_data", "Usuń dane ligi"),
         Binding("r", "restore_defaults", "Domyślne"),
     ]
 
@@ -86,7 +86,7 @@ class SettingsScreen(Screen[None]):
             yield ListView(id="settings-players")
         yield Static(
             "↑↓ opcja · +− lub ←→ zmień · 0-9 wpisz · L liga · A dodaj gracza"
-            " · U usuń gracza · D usuń demo · R domyślne",
+            " · U usuń gracza · D usuń dane ligi · R domyślne",
             id="hints",
         )
         yield Footer()
@@ -242,27 +242,45 @@ class SettingsScreen(Screen[None]):
         if controller.can_sync():
             cast("TyperApp", self.app).sync_now()
 
-    def action_remove_demo(self) -> None:
+    def action_remove_league_data(self) -> None:
+        """Clears out the league that is active. For the demo one that includes its players."""
         controller = self.controller
-        if not controller.has_demo_data():
-            self.notify("Nie ma już danych demo", severity="information")
+        league = controller.league()
+        if league is None:
+            self.notify("Najpierw wybierz ligę", severity="warning")
             return
-        self.app.push_screen(
-            Confirm(
-                f"Usunąć dane demo: ligę {escape(DEMO_LEAGUE)} oraz graczy "
-                f"{', '.join(DEMO_PLAYERS)} razem z ich typami?",
-                confirm="Tak, usuń demo",
-            ),
-            self._remove_demo,
-        )
 
-    async def _remove_demo(self, confirmed: bool) -> None:
+        if league[0] == DEMO_LEAGUE:
+            if not controller.has_demo_data():
+                self.notify("Nie ma już danych demo", severity="information")
+                return
+            question = (
+                f"Usunąć dane demo: ligę {escape(DEMO_LEAGUE)} oraz graczy "
+                f"{', '.join(DEMO_PLAYERS)} razem z ich typami?"
+            )
+        else:
+            question = (
+                f"Usunąć dane ligi {escape(league[0])} {league[1]}:"
+                " kolejki, mecze i wszystkie typy?"
+            )
+        self.app.push_screen(Confirm(question, confirm="Tak, usuń"), self._remove_league_data)
+
+    async def _remove_league_data(self, confirmed: bool) -> None:
         if not confirmed:
             return
-        matchdays, players = self.controller.remove_demo_data()
+        controller = self.controller
+        league = controller.league()
+        if league is None:
+            return
+        if league[0] == DEMO_LEAGUE:
+            matchdays, players = controller.remove_demo_data()
+            message = f"Usunięto kolejki demo: {matchdays}, graczy: {players}"
+        else:
+            matchdays = controller.remove_league(*league)
+            message = f"Usunięto kolejki ligi {league[0]}: {matchdays}"
         await self._reload_players()
         self._refresh_source()
-        self.notify(f"Usunięto kolejki demo: {matchdays}, graczy: {players}")
+        self.notify(message)
 
     def action_restore_defaults(self) -> None:
         self.app.push_screen(

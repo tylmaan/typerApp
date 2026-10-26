@@ -301,3 +301,25 @@ SettingRow > .settingrow--hint {
 #settings-players > ListItem.-highlight {
     background: $pitch-dim;
 }
+
+/* ------------------------------------------------------------------- logo */
+
+#logo {
+    padding: 1 2 0 2;
+    color: $pitch;
+    text-style: bold;
+}
+
+#brand {
+    padding: 0 2 0 2;
+}
+
+#matchday-countdown.-soon {
+    color: $joker;
+    text-style: bold;
+}
+
+#matchday-countdown.-urgent {
+    color: #e06c6c;
+    text-style: bold;
+}
