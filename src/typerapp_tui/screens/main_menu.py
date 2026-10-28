@@ -22,6 +22,7 @@ from typerapp_core.events import (
     MatchesUpdated,
     PredictionSaved,
     RankingChanged,
+    SettingsChanged,
 )
 from typerapp_tui.formatting import format_countdown
 from typerapp_tui.screens.dialogs import NamePrompt, PlayerPicker
@@ -35,6 +36,9 @@ if TYPE_CHECKING:
     from typerapp_tui.app import TyperApp
 
 DEMO_HINT = "pięciu graczy, dwie kolejki · nic nie zostaje na dysku"
+
+#: Seconds between two refreshes of the hints, so a countdown does not freeze.
+HINT_REFRESH = 30.0
 
 #: Drawn with box characters rather than letters, so it stays three lines tall.
 LOGO = "\n".join(
@@ -87,9 +91,21 @@ class MainMenuScreen(Screen[None]):
             bridge.subscribe(RankingChanged, lambda _: self._refresh_hints()),
             bridge.subscribe(PredictionSaved, lambda _: self._refresh_hints()),
             bridge.subscribe(MatchesUpdated, lambda _: self._refresh_hints()),
+            # Another league or other rules: the header and every number under it change.
+            bridge.subscribe(SettingsChanged, lambda _: self._refresh_all()),
             bridge.subscribe(DemoModeChanged, lambda _: self._rebuild_later()),
         ]
         await self._rebuild()
+        # The countdown under "Typuj kolejkę" has to keep moving while the menu just sits there.
+        self.set_interval(HINT_REFRESH, self._refresh_hints)
+
+    def on_screen_resume(self) -> None:
+        """Coming back from another screen: whatever changed while it was covered shows now."""
+        self._refresh_all()
+
+    def _refresh_all(self) -> None:
+        self._refresh_brand()
+        self._refresh_player()  # which refreshes the hints as well
 
     def on_unmount(self) -> None:
         for cancel in self._cancels:

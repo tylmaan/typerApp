@@ -19,7 +19,15 @@ from typerapp_core.controller import TyperController, season_for
 from typerapp_core.demo import LEAGUE as DEMO_LEAGUE
 from typerapp_core.demo import OPEN_MATCHDAY, PLAYED_MATCHDAY, seed_demo_data
 from typerapp_core.events import EventBus
-from typerapp_core.models import Matchday, MatchStatus, Score, ScoringRules, utc_now
+from typerapp_core.models import (
+    Match,
+    Matchday,
+    MatchStatus,
+    Prediction,
+    Score,
+    ScoringRules,
+    utc_now,
+)
 from typerapp_core.providers.base import ProviderUnavailable
 from typerapp_core.repository import Repository
 from typerapp_core.session import Session
@@ -1505,6 +1513,109 @@ def test_the_ranking_lists_every_matchday_of_the_season() -> None:
             await pilot.press("left")  # wraps to the last one, the 38th matchday
             await pilot.pause()
             assert "kolejka 38" in str(screen.query_one("#ranking-title").content)
+        repository.close()
+
+    run(scenario)
+
+
+# ---------------------------------------------------- the menu follows the game
+
+
+def two_leagues_app() -> tuple[Repository, TyperApp]:
+    """Kuba has points in Serie A and none in Ligue 1, which is where the menu has to differ."""
+    repository = Repository()
+    controller = TyperController(repository, EventBus())
+    kuba = controller.add_player("Kuba")
+    season = season_for(utc_now())
+    played = utc_now() - timedelta(days=3)
+
+    day = repository.upsert_matchday(Matchday(league="Serie A", season=season, number=9))
+    match = repository.upsert_matches(
+        [
+            Match(
+                matchday_id=day.id,  # type: ignore[arg-type]
+                home_team="Roma",
+                away_team="Lazio",
+                kickoff=played,
+                status=MatchStatus.FINISHED,
+                score=Score(2, 1),
+                external_id="serie-a-1",
+            )
+        ]
+    )[0]
+    repository.save_prediction(
+        Prediction(player_id=kuba.id, match_id=match.id, home_goals=2, away_goals=1)  # type: ignore[arg-type]
+    )
+    other = repository.upsert_matchday(Matchday(league="Ligue 1", season=season, number=9))
+    repository.upsert_matches(
+        [
+            Match(
+                matchday_id=other.id,  # type: ignore[arg-type]
+                home_team="Lens",
+                away_team="Nice",
+                kickoff=played,
+                status=MatchStatus.FINISHED,
+                score=Score(0, 0),
+                external_id="ligue-1-1",
+            )
+        ]
+    )
+    controller.set_league("Serie A", season)
+    return repository, TyperApp(controller)
+
+
+def test_the_menu_ranking_follows_the_league_that_is_active() -> None:
+    async def scenario() -> None:
+        repository, app = two_leagues_app()
+        async with app.run_test() as pilot:
+            screen = app.screen
+            assert isinstance(screen, MainMenuScreen)
+            points = app.controller.ranking()[0].points
+            assert points > 0
+            assert f"{points} pkt" in item_text(screen, "ranking")
+
+            # What the settings do when another league is picked.
+            app.controller.set_league("Ligue 1", season_for(utc_now()))
+            await pilot.pause()
+            assert "0 pkt" in item_text(screen, "ranking")  # not the Serie A numbers
+
+            app.controller.set_league("Serie A", season_for(utc_now()))
+            await pilot.pause()
+            assert f"{points} pkt" in item_text(screen, "ranking")
+        repository.close()
+
+    run(scenario)
+
+
+def test_the_menu_header_names_the_league_that_is_active() -> None:
+    async def scenario() -> None:
+        repository, app = two_leagues_app()
+        async with app.run_test() as pilot:
+            assert "Serie A" in str(app.screen.query_one("#brand").content)
+
+            app.controller.set_league("Ligue 1", season_for(utc_now()))
+            await pilot.pause()
+
+            assert "Ligue 1" in str(app.screen.query_one("#brand").content)
+        repository.close()
+
+    run(scenario)
+
+
+def test_the_menu_is_fresh_when_you_come_back_to_it() -> None:
+    async def scenario() -> None:
+        repository, app = two_leagues_app()
+        async with app.run_test() as pilot:
+            await choose(pilot, "settings")
+            # A change made while the menu is covered by another screen.
+            app.controller.set_league("Ligue 1", season_for(utc_now()))
+
+            await pilot.press("escape")
+            await pilot.pause()
+
+            assert isinstance(app.screen, MainMenuScreen)
+            assert "0 pkt" in item_text(app.screen, "ranking")
+            assert "Ligue 1" in str(app.screen.query_one("#brand").content)
         repository.close()
 
     run(scenario)
