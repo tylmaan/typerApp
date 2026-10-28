@@ -229,6 +229,15 @@ class TyperController:
             return False
         return any(match.status is MatchStatus.SCHEDULED for match in matches)
 
+    def is_finished(self, matchday_id: int) -> bool:
+        """Every match has been played, or never will be: nothing is left to predict or enter.
+
+        Not the same as "not open": a matchday whose deadline has passed but whose matches are
+        still being played is closed for predictions, yet results are still to come in.
+        """
+        matches = self.matches(matchday_id)
+        return bool(matches) and all(match.is_settled or match.is_void for match in matches)
+
     def time_left(self, matchday_id: int) -> timedelta | None:
         """How long until predictions close. Negative or ``None`` means closed."""
         deadline = self.deadline(matchday_id)

@@ -6,6 +6,7 @@ When the controller confirms a save, the event comes back and exactly one row is
 
 from __future__ import annotations
 
+import time
 from datetime import timedelta
 from functools import partial
 from typing import TYPE_CHECKING, cast
@@ -43,6 +44,10 @@ URGENT = timedelta(minutes=5)
 #: Seconds between two simulated matches, long enough to watch the points count up.
 SIMULATION_STEP = 1.0
 
+#: Seconds before the "you cannot type here" notice may appear again, so holding a key down
+#: does not stack a toast per repeat.
+LOCKED_NOTICE_GAP = 2.0
+
 
 class MatchdayScreen(Screen[None]):
     BINDINGS = [
@@ -73,6 +78,10 @@ class MatchdayScreen(Screen[None]):
         #: Matches still to be played by the demo simulation, in kickoff order.
         self._simulating: list[int] = []
         self._simulation_timer: Timer | None = None
+        #: Whether predictions were open the last time the countdown looked, so the footer
+        #: is redrawn only when that changes.
+        self._was_open: bool | None = None
+        self._last_locked_notice = 0.0
 
     @property
     def controller(self) -> TyperController:
@@ -99,10 +108,7 @@ class MatchdayScreen(Screen[None]):
         with VerticalScroll(id="matches"):
             yield from self._rows()
         yield Static(id="matchday-summary")
-        yield Static(
-            "⇧←→ lub [ ] kolejka · ↑↓ mecz · ←→ pole · 0-9 wynik · +/− zmień o jeden",
-            id="hints",
-        )
+        yield Static(id="hints")
         yield Footer()
 
     def _rows(self) -> list[MatchRow]:
@@ -137,6 +143,7 @@ class MatchdayScreen(Screen[None]):
         self._refresh_title()
         self._refresh_countdown()
         self._refresh_summary()
+        self._refresh_hints()
         self._focus_first_gap()
 
     def on_unmount(self) -> None:
@@ -179,6 +186,27 @@ class MatchdayScreen(Screen[None]):
         if urgent:
             countdown.styles.opacity = 0.45
             countdown.styles.animate("opacity", value=1.0, duration=0.8)
+
+        # The deadline passing takes the joker key away, so the footer has to follow.
+        is_open = controller.is_open(self.matchday_id)
+        if is_open != self._was_open:
+            self._was_open = is_open
+            self.refresh_bindings()
+            self._refresh_hints()
+
+    def _refresh_hints(self) -> None:
+        """Offer only what works in the matchday on screen."""
+        controller = self.controller
+        navigation = "⇧←→ lub [ ] kolejka · ↑↓ mecz"
+        if not self.is_own_matchday:
+            tail = "typy innego gracza, tylko do podglądu"
+        elif controller.is_finished(self.matchday_id):
+            tail = "kolejka zakończona, typy tylko do podglądu"
+        elif controller.is_open(self.matchday_id):
+            tail = "←→ pole · 0-9 wynik · +/− zmień o jeden"
+        else:
+            tail = "typowanie zamknięte · W wpisz wynik meczu"
+        self.query_one("#hints", Static).update(f"{navigation} · {tail}")
 
     def _refresh_summary(self) -> None:
         rows = list(self.query(MatchRow))
@@ -225,6 +253,8 @@ class MatchdayScreen(Screen[None]):
             touched = True
         if touched:
             self._refresh_summary()
+            self._refresh_hints()
+            self.refresh_bindings()  # the last result in takes W and R away
 
     def _on_points_awarded(self, event: PointsAwarded) -> None:
         """Remember what the player scored and let the row count it up."""
@@ -256,6 +286,8 @@ class MatchdayScreen(Screen[None]):
         self._refresh_title()
         self._refresh_countdown()
         self._refresh_summary()
+        self._refresh_hints()
+        self.refresh_bindings()  # another matchday can be open where this one is not
         self._award_points()
         self._focus_first_gap()
 
@@ -316,10 +348,39 @@ class MatchdayScreen(Screen[None]):
         cast("TyperApp", self.app).sync_now()
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
-        """Simulating only makes sense in demo mode, so everywhere else the key is hidden."""
+        """Hide the keys that would do nothing here, rather than offer them and ignore them.
+
+        * a finished matchday has no result left to enter and nothing left to play out,
+        * the joker goes onto a prediction, so it needs a matchday that still takes them, and
+          the keyboard has to belong to the player whose predictions these are.
+        """
+        controller = self.controller
         if action == "simulate":
-            return cast("TyperApp", self.app).demo
+            return cast("TyperApp", self.app).demo and not controller.is_finished(self.matchday_id)
+        if action == "enter_result":
+            return not controller.is_finished(self.matchday_id)
+        if action == "joker":
+            return controller.is_open(self.matchday_id) and self.is_own_matchday
         return True
+
+    def on_match_row_locked(self, message: MatchRow.Locked) -> None:
+        """Someone typed into a match that takes no predictions: say why nothing happened."""
+        del message
+        now = time.monotonic()
+        if now - self._last_locked_notice < LOCKED_NOTICE_GAP:
+            return
+        self._last_locked_notice = now
+
+        controller = self.controller
+        if not self.is_own_matchday:
+            text = "To są typy innego gracza, tylko do podglądu"
+        elif controller.is_finished(self.matchday_id):
+            text = "Ta kolejka jest zakończona, typy są tylko do podglądu"
+        elif not controller.is_open(self.matchday_id):
+            text = "Typowanie tej kolejki jest już zamknięte"
+        else:
+            text = "Ten mecz już się rozpoczął, nie można go typować"
+        self.notify(text, severity="information")
 
     def action_simulate(self) -> None:
         """Demo only: play the matchday out one match at a time.
@@ -352,6 +413,7 @@ class MatchdayScreen(Screen[None]):
             self._simulation_timer.stop()
             self._simulation_timer = None
         self.notify("Kolejka rozegrana · sprawdź ranking (Esc, potem Ranking)")
+        self.refresh_bindings()  # nothing is left to play, so R goes away
 
     def action_next_matchday(self) -> None:
         self._switch_matchday(1)

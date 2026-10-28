@@ -364,3 +364,35 @@ def test_a_matchday_with_one_match_left_is_still_open(
     controller.enter_result(first.id, Score(2, 2))  # type: ignore[arg-type]
 
     assert controller.is_open(matchday.id)  # type: ignore[arg-type]
+
+
+def test_a_matchday_is_finished_once_every_match_is_settled_or_void(
+    controller: TyperController, matchday: Matchday, clock: Clock
+) -> None:
+    first, second = controller.matches(matchday.id)  # type: ignore[arg-type]
+    assert not controller.is_finished(matchday.id)  # type: ignore[arg-type]
+
+    controller.enter_result(first.id, Score(1, 0))  # type: ignore[arg-type]
+    assert not controller.is_finished(matchday.id)  # type: ignore[arg-type]  # one is still to come
+
+    controller.enter_result(second.id, None, MatchStatus.POSTPONED)  # type: ignore[arg-type]
+    assert controller.is_finished(matchday.id)  # type: ignore[arg-type]  # played, or never will be
+
+
+def test_a_closed_matchday_is_not_finished_while_results_are_still_to_come(
+    controller: TyperController, matchday: Matchday, clock: Clock
+) -> None:
+    # The deadline has passed and the matches are on, but nothing has a result yet: closed for
+    # predictions, still open for results.
+    clock.moment = KICKOFF + timedelta(minutes=30)
+
+    assert not controller.is_open(matchday.id)  # type: ignore[arg-type]
+    assert not controller.is_finished(matchday.id)  # type: ignore[arg-type]
+
+
+def test_a_matchday_without_matches_is_not_finished(
+    controller: TyperController, repo: Repository
+) -> None:
+    empty = repo.upsert_matchday(Matchday(league=LEAGUE[0], season=LEAGUE[1], number=30))
+
+    assert not controller.is_finished(empty.id)  # type: ignore[arg-type]

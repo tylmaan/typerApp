@@ -67,6 +67,13 @@ class MatchRow(Widget):
             self.home = home
             self.away = away
 
+    class Locked(Message):
+        """The player tried to type into a match that can no longer be predicted."""
+
+        def __init__(self, match_id: int) -> None:
+            super().__init__()
+            self.match_id = match_id
+
     def __init__(
         self,
         match: Match,
@@ -194,6 +201,10 @@ class MatchRow(Widget):
 
     def on_key(self, event: events.Key) -> None:
         if not self.editable:
+            if _is_entry_key(event):
+                # Say why nothing happens, instead of swallowing the key in silence.
+                self.post_message(self.Locked(self.match_id))
+                event.stop()
             return
 
         if event.key in ("left", "right"):
@@ -238,6 +249,15 @@ class MatchRow(Widget):
 
     def __str__(self) -> str:
         return f"{self.match.home_team} {format_score(self.home, self.away)} {self.match.away_team}"
+
+
+#: Keys that change a score, apart from the digits.
+ENTRY_KEYS = ("plus", "equals_sign", "kp_plus", "minus", "underscore", "kp_minus")
+
+
+def _is_entry_key(event: events.Key) -> bool:
+    """Whether the key is an attempt to type a score."""
+    return bool(event.character and event.character.isdigit()) or event.key in ENTRY_KEYS
 
 
 def _clip(name: str, width: int = TEAM_WIDTH) -> str:

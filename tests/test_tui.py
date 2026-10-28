@@ -1621,6 +1621,190 @@ def test_the_menu_is_fresh_when_you_come_back_to_it() -> None:
     run(scenario)
 
 
+# --------------------------------------------- what a finished matchday offers
+
+
+def notices(app: TyperApp) -> list[str]:
+    return [notification.message for notification in app._notifications]
+
+
+async def open_played_matchday(pilot) -> MatchdayScreen:
+    """The matchday screen on the demo's played matchday, reached with the arrow keys."""
+    if isinstance(pilot.app.screen, MainMenuScreen):
+        await choose(pilot, "matchday")
+    await pilot.press("[")  # the one before the open matchday
+    await pilot.pause()
+    screen = pilot.app.screen
+    assert isinstance(screen, MatchdayScreen)
+    assert pilot.app.controller.is_finished(screen.matchday_id)
+    return screen
+
+
+def test_a_finished_matchday_hides_the_keys_that_do_nothing() -> None:
+    async def scenario() -> None:
+        repository, session = build_session()
+        app = TyperApp(session)
+        async with app.run_test() as pilot:
+            await choose(pilot, "demo")  # R is only there in the demo, so the demo shows it off
+            await choose(pilot, "matchday")
+            open_day = app.screen
+            assert isinstance(open_day, MatchdayScreen)
+            for action in ("enter_result", "joker", "simulate"):
+                assert open_day.check_action(action, ()) is True, action
+
+            finished = await open_played_matchday(pilot)
+
+            for action in ("enter_result", "joker", "simulate"):
+                assert finished.check_action(action, ()) is False, action
+        repository.close()
+
+    run(scenario)
+
+
+def test_the_result_dialog_does_not_open_on_a_finished_matchday() -> None:
+    async def scenario() -> None:
+        repository, session = build_session()
+        app = TyperApp(session)
+        async with app.run_test() as pilot:
+            screen = await open_played_matchday(pilot)
+
+            await pilot.press("w")
+            await pilot.pause()
+
+            assert app.screen is screen  # no dialog on top of it
+        repository.close()
+
+    run(scenario)
+
+
+def test_typing_into_a_finished_matchday_says_why_nothing_happens() -> None:
+    async def scenario() -> None:
+        repository, session = build_session()
+        app = TyperApp(session)
+        async with app.run_test() as pilot:
+            screen = await open_played_matchday(pilot)
+            row = screen.query(MatchRow).first()
+            row.focus()
+            await pilot.pause()
+
+            await pilot.press("2")
+            await pilot.pause()
+
+            assert any("zakończona" in text for text in notices(app))
+            assert (
+                row.home == app.controller.predictions(screen.matchday_id)[row.match_id].home_goals
+            )
+        repository.close()
+
+    run(scenario)
+
+
+def test_the_notice_is_not_repeated_for_every_key_pressed() -> None:
+    async def scenario() -> None:
+        repository, session = build_session()
+        app = TyperApp(session)
+        async with app.run_test() as pilot:
+            screen = await open_played_matchday(pilot)
+            screen.query(MatchRow).first().focus()
+            await pilot.pause()
+
+            await pilot.press("1", "2", "3", "4")
+            await pilot.pause()
+
+            assert sum("zakończona" in text for text in notices(app)) == 1
+        repository.close()
+
+    run(scenario)
+
+
+def test_the_hint_line_describes_what_the_matchday_offers() -> None:
+    async def scenario() -> None:
+        repository, session = build_session()
+        app = TyperApp(session)
+        async with app.run_test() as pilot:
+            await choose(pilot, "matchday")
+            open_hints = str(app.screen.query_one("#hints").content)
+            assert "0-9 wynik" in open_hints
+
+            finished = await open_played_matchday(pilot)
+            finished_hints = str(finished.query_one("#hints").content)
+
+            assert "kolejka zakończona" in finished_hints
+            assert "0-9" not in finished_hints  # no longer advertised
+        repository.close()
+
+    run(scenario)
+
+
+def test_passing_the_deadline_takes_the_joker_away_but_keeps_the_result_key() -> None:
+    async def scenario() -> None:
+        repository, session = build_session()
+        app = TyperApp(session)
+        async with app.run_test() as pilot:
+            await choose(pilot, "matchday")
+            screen = app.screen
+            assert isinstance(screen, MatchdayScreen)
+            assert screen.check_action("joker", ()) is True
+
+            deadline = app.controller.deadline(screen.matchday_id)
+            app.controller.clock = lambda: deadline + timedelta(minutes=10)
+            screen._refresh_countdown()  # it ticks on its own once a second
+
+            assert screen.check_action("joker", ()) is False  # nothing can be predicted now
+            assert screen.check_action("enter_result", ()) is True  # but results can come in
+            assert "typowanie zamknięte" in str(screen.query_one("#hints").content)
+        repository.close()
+
+    run(scenario)
+
+
+def test_somebody_elses_predictions_have_no_joker_key() -> None:
+    async def scenario() -> None:
+        repository, session = build_session()
+        app = TyperApp(session)
+        async with app.run_test() as pilot:
+            await choose(pilot, "ranking")
+            await pilot.press("enter")  # the leader's profile, who is not the active player
+            await pilot.pause()
+            await pilot.press("enter")  # a matchday of theirs
+            await pilot.pause()
+
+            screen = app.screen
+            assert isinstance(screen, MatchdayScreen)
+            assert not screen.is_own_matchday
+            assert screen.check_action("joker", ()) is False
+            assert "typy innego gracza" in str(screen.query_one("#hints").content)
+        repository.close()
+
+    run(scenario)
+
+
+def test_the_simulation_key_goes_away_once_the_matchday_is_played(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    play_matchday(monkeypatch)
+
+    async def scenario() -> None:
+        repository, session = build_session()
+        app = TyperApp(session)
+        async with app.run_test() as pilot:
+            await choose(pilot, "demo")
+            await choose(pilot, "matchday")
+            screen = app.screen
+            assert isinstance(screen, MatchdayScreen)
+            assert screen.check_action("simulate", ()) is True
+
+            await pilot.press("r")
+            await wait_until_played(pilot, screen.matchday_id)
+            await pilot.pause()
+
+            assert screen.check_action("simulate", ()) is False
+            assert "kolejka zakończona" in str(screen.query_one("#hints").content)
+        repository.close()
+
+    run(scenario)
+
+
 def test_the_simulation_finishes_however_many_timer_ticks_arrive(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1651,7 +1835,7 @@ def test_the_simulation_finishes_however_many_timer_ticks_arrive(
             for _ in range(2):  # ...the rest arrive later
                 screen._simulation_step()
             assert screen._simulating == [] and screen._simulation_timer is None
-            assert all(match.is_settled for match in app.controller.matches(screen.matchday_id))
+            assert app.controller.is_finished(screen.matchday_id)
         repository.close()
 
     run(scenario)
