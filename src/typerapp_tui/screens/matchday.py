@@ -15,6 +15,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import VerticalScroll
 from textual.screen import Screen
+from textual.timer import Timer
 from textual.widgets import Footer, Static
 
 from typerapp_core.events import (
@@ -71,6 +72,7 @@ class MatchdayScreen(Screen[None]):
         self._pending_award: tuple[int, int] | None = None
         #: Matches still to be played by the demo simulation, in kickoff order.
         self._simulating: list[int] = []
+        self._simulation_timer: Timer | None = None
 
     @property
     def controller(self) -> TyperController:
@@ -336,14 +338,20 @@ class MatchdayScreen(Screen[None]):
             self.notify("Wszystkie mecze tej kolejki są już rozegrane", severity="information")
             return
         self._simulating = pending
-        self.set_interval(SIMULATION_STEP, self._simulation_step, repeat=len(pending))
+        # No tick count here. A timer that is told to fire N times loses a tick whenever the
+        # event loop is busy, which would leave a match unplayed and the list non-empty, and R
+        # would then refuse to start again. The timer stops itself when the list runs out.
+        self._simulation_timer = self.set_interval(SIMULATION_STEP, self._simulation_step)
 
     def _simulation_step(self) -> None:
-        if not self._simulating:
+        if self._simulating:
+            cast("TyperApp", self.app).session.simulate_result(self._simulating.pop(0))
+        if self._simulating:
             return
-        cast("TyperApp", self.app).session.simulate_result(self._simulating.pop(0))
-        if not self._simulating:
-            self.notify("Kolejka rozegrana · sprawdź ranking (Esc, potem Ranking)")
+        if self._simulation_timer is not None:
+            self._simulation_timer.stop()
+            self._simulation_timer = None
+        self.notify("Kolejka rozegrana · sprawdź ranking (Esc, potem Ranking)")
 
     def action_next_matchday(self) -> None:
         self._switch_matchday(1)

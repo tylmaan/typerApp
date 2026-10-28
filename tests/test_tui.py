@@ -1619,3 +1619,39 @@ def test_the_menu_is_fresh_when_you_come_back_to_it() -> None:
         repository.close()
 
     run(scenario)
+
+
+def test_the_simulation_finishes_however_many_timer_ticks_arrive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A timer told to fire N times loses a tick when the event loop is busy, which used to leave
+    # a match unplayed and R refusing to start again. The simulation is over when the list of
+    # matches is empty, and it is the steps that decide that, not the clock.
+    monkeypatch.setattr("typerapp_tui.screens.matchday.SIMULATION_STEP", 600.0)
+
+    async def scenario() -> None:
+        repository, session = build_session()
+        app = TyperApp(session)
+        async with app.run_test() as pilot:
+            await choose(pilot, "demo")
+            await choose(pilot, "matchday")
+            screen = app.screen
+            assert isinstance(screen, MatchdayScreen)
+
+            await pilot.press("r")
+            assert len(screen._simulating) == 5 and screen._simulation_timer is not None
+
+            for _ in range(3):  # the clock delivered fewer ticks than there are matches...
+                screen._simulation_step()
+            assert len(screen._simulating) == 2 and screen._simulation_timer is not None
+
+            await pilot.press("r")  # ...and a second R does not start a second simulation
+            assert len(screen._simulating) == 2
+
+            for _ in range(2):  # ...the rest arrive later
+                screen._simulation_step()
+            assert screen._simulating == [] and screen._simulation_timer is None
+            assert all(match.is_settled for match in app.controller.matches(screen.matchday_id))
+        repository.close()
+
+    run(scenario)
