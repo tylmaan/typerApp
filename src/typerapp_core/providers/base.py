@@ -44,6 +44,9 @@ class FetchedMatch:
     status: MatchStatus = MatchStatus.SCHEDULED
     score: Score | None = None
     external_id: str | None = None
+    #: The round the source puts the match in. A whole season comes back as one list, so each
+    #: match has to say where it belongs; ``None`` means the source does not number it.
+    matchday: int | None = None
 
     def to_match(self, matchday_id: int) -> Match:
         return Match(
@@ -59,7 +62,7 @@ class FetchedMatch:
 
 @runtime_checkable
 class ResultsProvider(Protocol):
-    """Anything that can deliver the fixtures and results of a matchday."""
+    """Anything that can deliver the fixtures and results of a season."""
 
     #: Short identifier carried by the sync events, e.g. ``football-data.org``.
     name: str
@@ -75,16 +78,13 @@ class ResultsProvider(Protocol):
         """
         ...
 
-    def fetch_matchday(self, league: str, season: str, number: int) -> list[FetchedMatch]:
-        """Fixtures and, where known, results of one matchday.
+    def fetch_season(self, league: str, season: str) -> list[FetchedMatch]:
+        """Every fixture of the season, with the results of the ones already played.
+
+        The whole season in one go, rather than a matchday at a time: it is one request instead
+        of dozens, and it leaves no holes, so every matchday from the first one is there to be
+        looked at. Matches that cannot be placed in a numbered matchday are left out.
 
         Raises a :class:`ProviderError` when the data cannot be fetched.
-        """
-        ...
-
-    def current_matchday(self, league: str, season: str) -> int | None:
-        """Which matchday the league is playing now, used to bootstrap an empty database.
-
-        ``None`` when the source cannot tell.
         """
         ...

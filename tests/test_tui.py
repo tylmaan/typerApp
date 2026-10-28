@@ -690,7 +690,7 @@ def test_without_a_source_syncing_only_explains_itself() -> None:
 
 def test_pressing_s_fetches_and_rebuilds_the_matchday() -> None:
     async def scenario() -> None:
-        provider = FakeProvider(current=13)  # nothing to deliver on start-up
+        provider = FakeProvider()  # nothing to deliver on start-up
         repository, app = build(provider=provider)
         async with app.run_test() as pilot:
             await app.workers.wait_for_complete()  # the app syncs once on start
@@ -709,7 +709,7 @@ def test_pressing_s_fetches_and_rebuilds_the_matchday() -> None:
             await app.workers.wait_for_complete()
             await pilot.pause()
 
-            assert provider.asked == [12, 13, 14]
+            assert provider.asked == [(DEMO_LEAGUE, DEMO_SEASON)]  # one request, the whole season
             assert app.controller.last_sync() is not None
             assert len(app.screen.query(MatchRow)) == before + 1
         repository.close()
@@ -719,7 +719,7 @@ def test_pressing_s_fetches_and_rebuilds_the_matchday() -> None:
 
 def test_a_result_from_the_sync_lands_on_the_screen() -> None:
     async def scenario() -> None:
-        provider = FakeProvider(current=13)
+        provider = FakeProvider()
         repository, app = build(provider=provider)
         async with app.run_test() as pilot:
             await app.workers.wait_for_complete()
@@ -773,7 +773,7 @@ def test_a_failing_source_does_not_break_the_screen() -> None:
 
 def test_league_can_be_picked_in_the_settings() -> None:
     async def scenario() -> None:
-        provider = FakeProvider(current=None)
+        provider = FakeProvider()
         repository, app = build(provider=provider)
         async with app.run_test() as pilot:
             await pilot.press("down", "down", "down", "enter")  # settings
@@ -880,7 +880,7 @@ def picker_names(app: TyperApp) -> list[str]:
 def test_the_league_picker_offers_only_the_big_five_and_the_champions_league() -> None:
     async def scenario() -> None:
         # The database holds the old demo league too, and leagues from earlier clicking.
-        repository, app = build(provider=FakeProvider(current=None))
+        repository, app = build(provider=FakeProvider())
         repository.upsert_matchday(
             Matchday(league="Mistrzostwa świata", season="2026/27", number=2)
         )
@@ -900,7 +900,7 @@ def test_the_league_picker_offers_only_the_big_five_and_the_champions_league() -
 
 def test_a_stored_league_is_offered_for_the_season_it_was_stored_in() -> None:
     async def scenario() -> None:
-        repository, app = build(provider=FakeProvider(current=None))
+        repository, app = build(provider=FakeProvider())
         repository.upsert_matchday(Matchday(league="Serie A", season="2025/26", number=3))
         async with app.run_test() as pilot:
             await pilot.press("down", "down", "down", "enter")
@@ -955,7 +955,7 @@ def test_demo_data_can_be_removed_from_the_settings() -> None:
 
 def test_removing_the_demo_leaves_other_leagues_alone() -> None:
     async def scenario() -> None:
-        provider = FakeProvider({8: [fetched()]}, current=8)
+        provider = FakeProvider({8: [fetched()]})
         repository, app = build(provider=provider)
         async with app.run_test() as pilot:
             app.controller.set_league("Premier League", "2026/27")
@@ -982,7 +982,7 @@ def test_removing_the_demo_leaves_other_leagues_alone() -> None:
 
 def test_a_fetched_league_can_be_cleared_without_touching_the_players() -> None:
     async def scenario() -> None:
-        provider = FakeProvider({8: [fetched()]}, current=8)
+        provider = FakeProvider({8: [fetched()]})
         repository, app = build(provider=provider)
         async with app.run_test() as pilot:
             app.controller.set_league("Premier League", "2026/27")
@@ -1021,7 +1021,7 @@ def test_the_menu_shows_only_your_own_standing() -> None:
 
 def test_the_demo_league_does_not_try_to_fetch_anything() -> None:
     async def scenario() -> None:
-        repository, app = build(provider=FakeProvider(current=8))
+        repository, app = build(provider=FakeProvider())
         app.controller.provider.supports = lambda league: "demo" not in league  # type: ignore[method-assign]
         async with app.run_test() as pilot:
             await app.workers.wait_for_complete()
@@ -1479,6 +1479,32 @@ def test_the_settings_hide_the_league_keys_in_the_demo() -> None:
             assert app.screen.check_action("pick_league", ()) is False
             assert app.screen.check_action("remove_league_data", ()) is False
             assert "tryb demo" in str(app.screen.query_one("#settings-source").content)
+        repository.close()
+
+    run(scenario)
+
+
+def test_the_ranking_lists_every_matchday_of_the_season() -> None:
+    async def scenario() -> None:
+        season = {
+            number: [fetched(f"Home {number}", f"Away {number}", external_id=str(number))]
+            for number in range(1, 39)
+        }
+        repository, app = build(demo=False, provider=FakeProvider(season))
+        app.controller.add_player("Kuba")  # the data is there before the app starts
+        app.controller.set_league("Premier League", "2026/27")
+        app.controller.sync()
+        async with app.run_test() as pilot:
+            await choose(pilot, "ranking")
+
+            screen = app.screen
+            assert isinstance(screen, RankingScreen)
+            assert len(screen._scopes) == 39  # the overall table plus all 38 matchdays
+            assert "1/39" in str(screen.query_one("#ranking-title").content)
+
+            await pilot.press("left")  # wraps to the last one, the 38th matchday
+            await pilot.pause()
+            assert "kolejka 38" in str(screen.query_one("#ranking-title").content)
         repository.close()
 
     run(scenario)

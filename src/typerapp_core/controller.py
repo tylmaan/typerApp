@@ -394,7 +394,11 @@ class TyperController:
         return last is None or self.now() - last >= MIN_SYNC_INTERVAL
 
     def sync(self, *, force: bool = True) -> int:
-        """Fetch the current and the previous matchday, award points, refresh the ranking.
+        """Fetch the whole season of the active league, award points, refresh the ranking.
+
+        One request brings every matchday, played and still to come, so none is missing from
+        the first one on, and the results that arrived late are filled in by the same call.
+        Matchdays are created from what the source returns, so nothing is left behind empty.
 
         Returns the number of matches that actually changed. Raises
         :class:`~typerapp_core.providers.base.ProviderError` on failure, after announcing it
@@ -410,14 +414,16 @@ class TyperController:
         self.events.publish(SyncStarted(source=source))
         changed = 0
         try:
-            for number in self._sync_targets(league):
-                fetched = self.provider.fetch_matchday(league[0], league[1], number)
-                if not fetched:
-                    continue  # no fixtures: do not leave an empty matchday behind
+            fetched = self.provider.fetch_season(league[0], league[1])
+            by_matchday: dict[int, list[FetchedMatch]] = {}
+            for entry in fetched:
+                if entry.matchday is not None:
+                    by_matchday.setdefault(entry.matchday, []).append(entry)
+            for number in sorted(by_matchday):
                 matchday = self.repository.upsert_matchday(
                     Matchday(league=league[0], season=league[1], number=number)
                 )
-                changed += self._store_fetched(matchday.id, fetched)  # type: ignore[arg-type]
+                changed += self._store_fetched(matchday.id, by_matchday[number])  # type: ignore[arg-type]
         except ProviderError as error:
             self.events.publish(SyncFailed(source=source, message=str(error)))
             raise
@@ -425,25 +431,6 @@ class TyperController:
         self.repository.set_setting(LAST_SYNC, self.now().isoformat())
         self.events.publish(SyncFinished(source=source, updated_matches=changed))
         return changed
-
-    def _sync_targets(self, league: tuple[str, str]) -> list[int]:
-        """The matchday before, the current one and the next one.
-
-        The one before fills in results that arrived late, and the next one is the whole
-        point of the game: without it there would be nothing left to predict, because the
-        current matchday is usually already being played.
-
-        The source is asked first, and only then our own data. The other way round the demo
-        seed would decide what to fetch, and real fixtures would be merged into demo
-        matchdays that happen to carry the same number.
-        """
-        number = self.provider.current_matchday(*league)
-        if not number:
-            current = self.current_matchday()
-            number = current.number if current else None
-        if not number:
-            return []
-        return [n for n in (number - 1, number, number + 1) if n >= 1]
 
     def _store_fetched(self, matchday_id: int, fetched: Iterable[FetchedMatch]) -> int:
         before = {match.id: match for match in self.repository.matches(matchday_id)}

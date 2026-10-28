@@ -1,7 +1,7 @@
 """Results providers, tested against a recorded answer instead of the real service."""
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import httpx
@@ -52,8 +52,7 @@ def test_both_providers_satisfy_the_contract() -> None:
 
 def test_manual_provider_fetches_nothing() -> None:
     manual = ManualResultsProvider()
-    assert manual.fetch_matchday("Premier League", "2026/27", 12) == []
-    assert manual.current_matchday("Premier League", "2026/27") is None
+    assert manual.fetch_season("Premier League", "2026/27") == []
     assert not manual.online
 
 
@@ -76,8 +75,8 @@ def test_fetched_match_becomes_a_match() -> None:
 # ------------------------------------------------------------------- the client
 
 
-def test_recorded_matchday_is_mapped() -> None:
-    matches = answering(FIXTURE).fetch_matchday("Premier League", "2026/27", 12)
+def test_recorded_season_is_mapped() -> None:
+    matches = answering(FIXTURE).fetch_season("Premier League", "2026/27")
 
     assert len(matches) == 3
     finished, upcoming, postponed = matches
@@ -86,31 +85,96 @@ def test_recorded_matchday_is_mapped() -> None:
     assert finished.kickoff == datetime(2026, 11, 7, 15, 0, tzinfo=UTC)
     assert (finished.status, finished.score) == (MatchStatus.FINISHED, Score(2, 1))
     assert finished.external_id == "497365"
+    assert [match.matchday for match in matches] == [12, 12, 12]  # each knows its round
 
     assert (upcoming.status, upcoming.score) == (MatchStatus.SCHEDULED, None)
     assert (postponed.status, postponed.score) == (MatchStatus.POSTPONED, None)
 
 
-def test_request_carries_the_key_and_the_filters() -> None:
-    seen: dict[str, str] = {}
+def test_request_carries_the_key_and_asks_for_the_whole_season() -> None:
+    seen: list[dict[str, str]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        seen["url"] = str(request.url)
-        seen["key"] = request.headers.get(API_KEY_HEADER, "")
+        seen.append({"url": str(request.url), "key": request.headers.get(API_KEY_HEADER, "")})
         return httpx.Response(200, json=FIXTURE)
 
-    provider_with(handler).fetch_matchday("Premier League", "2026/27", 12)
+    provider_with(handler).fetch_season("Premier League", "2026/27")
 
-    assert seen["key"] == "test-key"
-    assert "/v4/competitions/PL/matches" in seen["url"]
-    assert "matchday=12" in seen["url"]
-    assert "season=2026" in seen["url"]  # the API wants the starting year
+    assert len(seen) == 1  # one request for the season, not one per matchday
+    assert seen[0]["key"] == "test-key"
+    assert "/v4/competitions/PL/matches" in seen[0]["url"]
+    assert "season=2026" in seen[0]["url"]  # the API wants the starting year
+    assert "matchday=" not in seen[0]["url"]  # and no narrowing to a round
 
 
-def test_current_matchday_is_read_from_the_competition() -> None:
-    payload = {"currentSeason": {"currentMatchday": 13}}
-    assert answering(payload).current_matchday("PL", "2026/27") == 13
-    assert answering({"currentSeason": {}}).current_matchday("PL", "2026/27") is None
+def match_entry(number: int, home: str, away: str, **extra: object) -> dict:
+    """A match the way the API sends it, with just the fields the client reads."""
+    kickoff = datetime(2026, 8, 1, 15, 0, tzinfo=UTC) + timedelta(days=7 * number)
+    return {
+        "id": number * 100 + len(home),
+        "utcDate": kickoff.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "status": "TIMED",
+        "matchday": number,
+        "stage": "REGULAR_SEASON",
+        "homeTeam": {"shortName": home},
+        "awayTeam": {"shortName": away},
+        "score": {"fullTime": {"home": None, "away": None}},
+    } | extra
+
+
+def test_a_whole_season_comes_back_with_every_matchday_numbered() -> None:
+    entries = [match_entry(day, "Arsenal", "Chelsea") for day in range(1, 39)]
+
+    matches = answering({"matches": entries}).fetch_season("Premier League", "2026/27")
+
+    assert [match.matchday for match in matches] == list(range(1, 39))
+
+
+def test_knockout_rounds_are_left_out_of_the_numbered_matchdays() -> None:
+    # A knockout tie has no matchday of its own: merging it into the league phase would put
+    # last-16 matches into "matchday 1", so only the numbered stages are taken.
+    entries = [
+        match_entry(1, "Arsenal", "Chelsea", stage="LEAGUE_STAGE"),
+        match_entry(1, "Inter", "Milan", stage="LAST_16"),
+        match_entry(2, "Roma", "Lazio", stage="LEAGUE_STAGE"),
+    ]
+
+    matches = answering({"matches": entries}).fetch_season("Liga Mistrzów", "2026/27")
+
+    assert [(m.home_team, m.matchday) for m in matches] == [("Arsenal", 1), ("Roma", 2)]
+
+
+def test_a_tie_without_teams_does_not_fail_the_whole_season() -> None:
+    entries = [
+        match_entry(1, "Arsenal", "Chelsea"),
+        match_entry(2, "", "", homeTeam={"name": None}, awayTeam={"name": None}),
+        match_entry(3, "Roma", "Lazio"),
+    ]
+
+    matches = answering({"matches": entries}).fetch_season("Premier League", "2026/27")
+
+    assert [match.matchday for match in matches] == [1, 3]
+
+
+def test_a_match_without_a_matchday_number_is_skipped() -> None:
+    entries = [match_entry(1, "Arsenal", "Chelsea"), match_entry(2, "Roma", "Lazio", matchday=None)]
+
+    matches = answering({"matches": entries}).fetch_season("Premier League", "2026/27")
+
+    assert [match.home_team for match in matches] == ["Arsenal"]
+
+
+def test_a_season_nothing_of_which_can_be_read_is_an_error() -> None:
+    # Skipping a few matches is fine; skipping all of them means the format changed, and that
+    # should be said out loud instead of quietly saving an empty season.
+    entries = [match_entry(day, "", "", homeTeam={}, awayTeam={}) for day in range(1, 5)]
+
+    with pytest.raises(ProviderUnavailable, match="None of the 4"):
+        answering({"matches": entries}).fetch_season("Premier League", "2026/27")
+
+
+def test_an_empty_season_is_not_an_error() -> None:
+    assert answering({"matches": []}).fetch_season("Premier League", "2026/27") == []
 
 
 @pytest.mark.parametrize(
@@ -124,7 +188,7 @@ def test_current_matchday_is_read_from_the_competition() -> None:
 )
 def test_http_errors_are_translated(status_code: int, expected: type[Exception]) -> None:
     with pytest.raises(expected):
-        answering({}, status_code).fetch_matchday("Premier League", "2026/27", 12)
+        answering({}, status_code).fetch_season("Premier League", "2026/27")
 
 
 def test_network_failure_is_translated() -> None:
@@ -132,22 +196,22 @@ def test_network_failure_is_translated() -> None:
         raise httpx.ConnectTimeout("nothing there")
 
     with pytest.raises(ProviderUnavailable):
-        provider_with(handler).fetch_matchday("Premier League", "2026/27", 12)
+        provider_with(handler).fetch_season("Premier League", "2026/27")
 
 
 def test_answer_without_matches_is_an_error() -> None:
     with pytest.raises(ProviderUnavailable):
-        answering({"competition": {}}).fetch_matchday("Premier League", "2026/27", 12)
+        answering({"competition": {}}).fetch_season("Premier League", "2026/27")
 
 
 def test_missing_key_is_reported_before_any_request() -> None:
     with pytest.raises(MissingApiKey):
-        ApiResultsProvider(None).fetch_matchday("Premier League", "2026/27", 12)
+        ApiResultsProvider(None).fetch_season("Premier League", "2026/27")
 
 
 def test_league_outside_the_free_plan_is_reported() -> None:
     with pytest.raises(CompetitionUnavailable):
-        answering(FIXTURE).fetch_matchday("Ekstraklasa", "2026/27", 12)
+        answering(FIXTURE).fetch_season("Ekstraklasa", "2026/27")
 
 
 # ------------------------------------------------------------------- the mapping
@@ -258,13 +322,13 @@ def test_other_competitions_are_neither_chosen_nor_fetched(league: str) -> None:
     assert competition_code(league) is None
     assert not ApiResultsProvider("key").supports(league)
     with pytest.raises(CompetitionUnavailable):
-        answering(FIXTURE).fetch_matchday(league, "2026/27", 1)
+        answering(FIXTURE).fetch_season(league, "2026/27")
 
 
 @pytest.mark.parametrize("league", [name for _, name in COMPETITIONS])
 def test_every_offered_competition_can_be_fetched(league: str) -> None:
     assert ApiResultsProvider("key").supports(league)
-    assert answering(FIXTURE).fetch_matchday(league, "2026/27", 12)
+    assert answering(FIXTURE).fetch_season(league, "2026/27")
 
 
 @pytest.mark.parametrize(

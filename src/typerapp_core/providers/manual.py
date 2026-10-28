@@ -18,10 +18,6 @@ class ManualResultsProvider:
         del league
         return False
 
-    def fetch_matchday(self, league: str, season: str, number: int) -> list[FetchedMatch]:
-        del league, season, number
-        return []
-
-    def current_matchday(self, league: str, season: str) -> int | None:
+    def fetch_season(self, league: str, season: str) -> list[FetchedMatch]:
         del league, season
-        return None
+        return []

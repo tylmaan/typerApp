@@ -1,5 +1,6 @@
 """Shared builders for the core tests."""
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 from typerapp_core.models import Match, MatchStatus, Player, Prediction, Score
@@ -76,22 +77,23 @@ class FakeProvider:
         self,
         matches: dict[int, list[FetchedMatch]] | None = None,
         *,
-        current: int | None = 12,
         error: Exception | None = None,
     ) -> None:
+        #: Matchday number -> its matches, which is how a test thinks about a season.
         self.matches = matches or {}
-        self.current = current
         self.error = error
-        self.asked: list[int] = []
+        #: One ``(league, season)`` per request, since a season is fetched in a single one.
+        self.asked: list[tuple[str, str]] = []
 
-    def fetch_matchday(self, league: str, season: str, number: int) -> list[FetchedMatch]:
+    def fetch_season(self, league: str, season: str) -> list[FetchedMatch]:
         if self.error:
             raise self.error
-        self.asked.append(number)
-        return self.matches.get(number, [])
-
-    def current_matchday(self, league: str, season: str) -> int | None:
-        return self.current
+        self.asked.append((league, season))
+        return [
+            replace(entry, matchday=number)
+            for number, entries in sorted(self.matches.items())
+            for entry in entries
+        ]
 
 
 def fetched(

@@ -8,6 +8,7 @@ mapped defensively: an unknown status is treated as "not played yet" and a missi
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -95,42 +96,28 @@ class ApiResultsProvider:
     def supports(self, league: str) -> bool:
         return competition_code(league) is not None
 
-    def fetch_matchday(self, league: str, season: str, number: int) -> list[FetchedMatch]:
+    def fetch_season(self, league: str, season: str) -> list[FetchedMatch]:
+        """The whole season in a single request: a few hundred matches, one of the ten the
+        free plan allows each minute.
+
+        Only the rounds that are played in numbered matchdays come back. A knockout round has
+        no matchday number of its own to put it under, so it is left out rather than merged
+        into the league phase; the Champions League does not publish its knockouts this early
+        anyway, and the ties that are not decided yet have no teams to show.
+        """
         if not self.api_key:
             raise MissingApiKey(
                 "No football-data.org key: set FOOTBALL_DATA_API_KEY in the .env file"
             )
         code = competition_code(league)
         if code is None:
-            raise CompetitionUnavailable(f"{league} is not part of the free plan")
+            raise CompetitionUnavailable(f"{league} is not part of the offered competitions")
 
-        payload = self._get(
-            f"/competitions/{code}/matches",
-            {"matchday": str(number), "season": season_parameter(season)},
-        )
-        matches = payload.get("matches")
-        if not isinstance(matches, list):
+        payload = self._get(f"/competitions/{code}/matches", {"season": season_parameter(season)})
+        entries = payload.get("matches")
+        if not isinstance(entries, list):
             raise ProviderUnavailable("Unexpected answer: no list of matches")
-        return [parse_match(entry) for entry in matches if isinstance(entry, dict)]
-
-    def current_matchday(self, league: str, season: str) -> int | None:
-        """Ask the league itself which matchday is current, to bootstrap an empty database."""
-        del season  # the API answers for the season that is running
-        if not self.api_key:
-            raise MissingApiKey(
-                "No football-data.org key: set FOOTBALL_DATA_API_KEY in the .env file"
-            )
-        code = competition_code(league)
-        if code is None:
-            raise CompetitionUnavailable(f"{league} is not part of the free plan")
-
-        payload = self._get(f"/competitions/{code}", {})
-        current = payload.get("currentSeason")
-        if isinstance(current, dict):
-            number = current.get("currentMatchday")
-            if isinstance(number, int) and number > 0:
-                return number
-        return None
+        return _parse_season(entry for entry in entries if isinstance(entry, dict))
 
     # ------------------------------------------------------------------ private
 
@@ -166,6 +153,34 @@ class ApiResultsProvider:
         return payload
 
 
+#: Stages played in numbered matchdays. Anything else is a knockout round.
+NUMBERED_STAGES = frozenset({"REGULAR_SEASON", "LEAGUE_STAGE", "GROUP_STAGE"})
+
+
+def _parse_season(entries: Iterable[dict[str, Any]]) -> list[FetchedMatch]:
+    """Read a season's worth of matches, skipping the ones that cannot be shown.
+
+    A match with no teams yet (a tie still to be decided) or without a matchday number has
+    nowhere to go, and one such entry must not fail the whole sync. If *nothing* can be read
+    the format has probably changed, and that is reported instead of silently saving nothing.
+    """
+    entries = list(entries)
+    candidates = [
+        entry for entry in entries if entry.get("stage", "REGULAR_SEASON") in NUMBERED_STAGES
+    ]
+    parsed: list[FetchedMatch] = []
+    for entry in candidates:
+        try:
+            match = parse_match(entry)
+        except ProviderUnavailable:
+            continue
+        if match.matchday is not None:
+            parsed.append(match)
+    if candidates and not parsed:
+        raise ProviderUnavailable(f"None of the {len(candidates)} matches could be read")
+    return parsed
+
+
 def parse_match(entry: dict[str, Any]) -> FetchedMatch:
     """Map one match from the API onto the game's own model."""
     home = _team_name(entry.get("homeTeam"))
@@ -180,6 +195,7 @@ def parse_match(entry: dict[str, Any]) -> FetchedMatch:
         status = MatchStatus.SCHEDULED
 
     external_id = entry.get("id")
+    matchday = entry.get("matchday")
     return FetchedMatch(
         home_team=home,
         away_team=away,
@@ -187,6 +203,7 @@ def parse_match(entry: dict[str, Any]) -> FetchedMatch:
         status=status,
         score=score,
         external_id=str(external_id) if external_id is not None else None,
+        matchday=matchday if isinstance(matchday, int) and matchday > 0 else None,
     )
 
 

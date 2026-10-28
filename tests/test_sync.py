@@ -1,6 +1,7 @@
 """Synchronisation: what the controller does with whatever a provider returns."""
 
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -109,39 +110,65 @@ def test_sync_stores_the_fixtures(
     assert kinds(recorded, MatchesUpdated)
 
 
-def test_sync_asks_for_the_previous_matchday_too(
+def test_sync_fetches_the_whole_season_in_one_request(
     repo: Repository, bus: EventBus, clock: Clock
 ) -> None:
-    provider = FakeProvider({12: [fetched()]}, current=12)
+    provider = FakeProvider(
+        {
+            number: [
+                fetched(
+                    f"Home {number}.{slot}", f"Away {number}.{slot}", external_id=f"{number}.{slot}"
+                )
+                for slot in range(2)
+            ]
+            for number in range(1, 39)
+        }
+    )
+    controller = make_controller(repo, bus, clock, provider)
+
+    changed = controller.sync()
+
+    assert provider.asked == [LEAGUE]  # one request, however many matchdays come back
+    assert changed == 76
+    assert [day.number for day in controller.matchdays()] == list(range(1, 39))
+    assert all(len(controller.matches(day.id)) == 2 for day in controller.matchdays())  # type: ignore[arg-type]
+
+
+def test_every_matchday_from_the_first_is_stored_even_when_played_long_ago(
+    repo: Repository, bus: EventBus, clock: Clock
+) -> None:
+    # The old window of three matchdays left a hole below it: the list started wherever the
+    # first sync happened to be, and the rounds before that were never there to look at.
+    played = fetched(status=MatchStatus.FINISHED, score=Score(1, 0))
+    provider = FakeProvider(
+        {1: [played], 2: [fetched(external_id="2")], 30: [fetched(external_id="3")]}
+    )
     controller = make_controller(repo, bus, clock, provider)
 
     controller.sync()
 
-    assert provider.asked == [11, 12, 13]
+    assert [day.number for day in controller.matchdays()] == [1, 2, 30]
+    assert controller.matches(controller.matchdays()[0].id)[0].is_settled  # type: ignore[arg-type]
 
 
-def test_the_source_decides_which_matchday_to_fetch(
+def test_matches_without_a_matchday_number_are_left_out(
     repo: Repository, bus: EventBus, clock: Clock
 ) -> None:
-    # Demo data says matchday 13, the real league is at 8. Asking about 13 would merge real
-    # fixtures into the demo matchdays, which is exactly what happened once.
-    seed_demo_data(repo)
-    provider = FakeProvider({8: [fetched()]}, current=8)
-    controller = TyperController(repo, bus, clock, provider)
-    controller.set_league(*LEAGUE)
+    class Unnumbered(FakeProvider):
+        def fetch_season(self, league: str, season: str):
+            return [fetched(), replace(fetched("Leeds", "Burnley", external_id="9"), matchday=3)]
 
-    controller.sync()
+    controller = make_controller(repo, bus, clock, Unnumbered())
 
-    assert provider.asked == [7, 8, 9]
-    numbers = [day.number for day in controller.matchdays()]
-    assert numbers == [8]  # only the matchday the source had fixtures for
+    assert controller.sync() == 1
+    assert [day.number for day in controller.matchdays()] == [3]
 
 
 def test_demo_data_cannot_collide_with_fetched_fixtures(
     repo: Repository, bus: EventBus, clock: Clock
 ) -> None:
     seed_demo_data(repo, now=NOW)
-    controller = TyperController(repo, bus, clock, FakeProvider({8: [fetched()]}, current=8))
+    controller = TyperController(repo, bus, clock, FakeProvider({8: [fetched()]}))
     controller.set_league(*LEAGUE)
 
     controller.sync()
@@ -152,23 +179,15 @@ def test_demo_data_cannot_collide_with_fetched_fixtures(
         assert len(repo.matches(day.id)) == 5  # untouched by the sync
 
 
-def test_first_matchday_has_no_predecessor(repo: Repository, bus: EventBus, clock: Clock) -> None:
-    provider = FakeProvider({1: [fetched()]}, current=1)
-    controller = make_controller(repo, bus, clock, provider)
-
-    controller.sync()
-
-    assert provider.asked == [1, 2]
-
-
-def test_nothing_to_sync_without_a_current_matchday(
+def test_a_season_with_no_matches_creates_nothing(
     repo: Repository, bus: EventBus, clock: Clock
 ) -> None:
-    provider = FakeProvider(current=None)
+    provider = FakeProvider()
     controller = make_controller(repo, bus, clock, provider)
 
     assert controller.sync() == 0
-    assert provider.asked == []
+    assert provider.asked == [LEAGUE]
+    assert controller.matchdays() == []  # no empty matchday left behind
 
 
 def test_syncing_twice_changes_nothing_the_second_time(
@@ -283,7 +302,7 @@ def test_staleness_decides_the_sync_on_start(repo: Repository, bus: EventBus, cl
     assert controller.should_sync()
 
     assert controller.sync(force=False) == 0  # nothing new, but it did ask
-    assert provider.asked == [11, 12, 13, 11, 12, 13]
+    assert provider.asked == [LEAGUE, LEAGUE]
 
 
 def test_a_broken_timestamp_is_ignored(repo: Repository, bus: EventBus, clock: Clock) -> None:
@@ -294,29 +313,13 @@ def test_a_broken_timestamp_is_ignored(repo: Repository, bus: EventBus, clock: C
     assert controller.should_sync()
 
 
-def test_a_matchday_without_fixtures_is_not_created(
-    repo: Repository, bus: EventBus, clock: Clock
-) -> None:
-    # Asking for the matchday after the last one of the season answers with nothing, and an
-    # empty matchday would then show up in the ranking and the profile.
-    provider = FakeProvider({12: [fetched()]}, current=12)
-    controller = make_controller(repo, bus, clock, provider)
-
-    controller.sync()
-
-    assert provider.asked == [11, 12, 13]
-    assert [day.number for day in controller.matchdays()] == [12]
-
-
 def test_the_overall_ranking_counts_the_active_league_only(
     repo: Repository, bus: EventBus, clock: Clock
 ) -> None:
     # The demo league and a fetched one can sit in the database side by side; their points
     # must not be added together.
     seed_demo_data(repo, now=NOW)
-    provider = FakeProvider(
-        {8: [fetched(status=MatchStatus.FINISHED, score=Score(2, 1))]}, current=8
-    )
+    provider = FakeProvider({8: [fetched(status=MatchStatus.FINISHED, score=Score(2, 1))]})
     controller = TyperController(repo, bus, clock, provider)
     controller.set_league(*LEAGUE)
     controller.sync()
