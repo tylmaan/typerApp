@@ -323,3 +323,10 @@ SettingRow > .settingrow--hint {
     color: #e06c6c;
     text-style: bold;
 }
+
+/* ---------------------------------------------------------------- demo mode */
+
+/* A yellow line along the top of every screen, so it is never unclear whose data this is. */
+TyperApp.-demo Screen {
+    border-top: tall #f2c744;
+}

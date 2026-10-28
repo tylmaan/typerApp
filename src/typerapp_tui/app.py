@@ -13,12 +13,14 @@ from textual.binding import Binding
 from textual.screen import Screen
 
 from typerapp_core.controller import TyperController
+from typerapp_core.events import DemoModeChanged
 from typerapp_core.providers.base import (
     CompetitionUnavailable,
     MissingApiKey,
     ProviderError,
     RateLimited,
 )
+from typerapp_core.session import Session
 from typerapp_tui.bridge import EventBridge
 from typerapp_tui.formatting import plural_matches
 from typerapp_tui.screens.main_menu import MainMenuScreen
@@ -31,18 +33,52 @@ class TyperApp(App[None]):
 
     BINDINGS = [Binding("ctrl+q", "quit", "Wyjście", show=False)]
 
-    def __init__(self, controller: TyperController) -> None:
+    def __init__(self, source: TyperController | Session) -> None:
+        """Takes a :class:`Session`, or a bare controller, which it wraps in one."""
         super().__init__()
-        self.controller = controller
-        self.bridge = EventBridge(self, controller.events)
+        self.session = source if isinstance(source, Session) else Session(source)
+        self.bridge = EventBridge(self, self.session.events)
+        #: Positions the ranking last showed, per table, so that ▲▼ means "since you last
+        #: looked" and survives leaving the screen while results come in elsewhere.
+        self.ranking_positions: dict[int | None, dict[int, int]] = {}
+
+    @property
+    def controller(self) -> TyperController:
+        """Whichever game is active: the real one, or the demo while it is switched on."""
+        return self.session.controller
+
+    @property
+    def demo(self) -> bool:
+        return self.session.demo
 
     def get_default_screen(self) -> Screen[None]:
         """The menu is always at the bottom of the stack, so Esc anywhere leads home."""
         return MainMenuScreen()
 
     def on_mount(self) -> None:
+        self.bridge.subscribe(DemoModeChanged, self._on_demo_changed)
+        self.set_class(self.demo, "-demo")
+        self._remember_ranking()
         if self.controller.should_sync():
             self.sync_now(force=False, quiet=True)
+
+    def _on_demo_changed(self, event: DemoModeChanged) -> None:
+        """Other data from now on: tint every screen and start the leaderboard over."""
+        self.set_class(event.active, "-demo")
+        self._remember_ranking()
+
+    def _remember_ranking(self) -> None:
+        """Take the overall table as the baseline the ▲▼ are counted from.
+
+        Without it the first look at the ranking has nothing to compare with, so playing a
+        matchday and then opening the table would show no movement at all.
+        """
+        self.ranking_positions = {
+            None: {entry.player_id: entry.position for entry in self.controller.ranking()}
+        }
+
+    def on_unmount(self) -> None:
+        self.session.close()
 
     # -------------------------------------------------------------------- sync
 
@@ -65,6 +101,8 @@ class TyperApp(App[None]):
     def _why_not(self) -> str:
         """Why nothing can be fetched right now, said in a way the player can act on."""
         controller = self.controller
+        if self.demo:
+            return "W trybie demo wyniki wpisujesz sam (W) albo rozgrywasz całą kolejkę (R)"
         if not controller.provider.online:
             return "Brak klucza API: wpisz FOOTBALL_DATA_API_KEY do pliku .env"
         league = controller.league()

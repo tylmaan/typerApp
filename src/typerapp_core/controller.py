@@ -217,7 +217,17 @@ class TyperController:
         return matchday_deadline(self.matches(matchday_id), self.rules())
 
     def is_open(self, matchday_id: int) -> bool:
-        return is_matchday_open(self.matches(matchday_id), self.now(), self.rules())
+        """Whether there is still something to predict in the matchday.
+
+        The deadline has to be ahead *and* at least one match still has to be played: a
+        matchday whose results are all in is over, whatever the clock says. In real life the
+        two coincide, since matches are played after the deadline, but the demo plays its
+        matches out ahead of time.
+        """
+        matches = self.matches(matchday_id)
+        if not is_matchday_open(matches, self.now(), self.rules()):
+            return False
+        return any(match.status is MatchStatus.SCHEDULED for match in matches)
 
     def time_left(self, matchday_id: int) -> timedelta | None:
         """How long until predictions close. Negative or ``None`` means closed."""
@@ -539,16 +549,8 @@ class TyperController:
     def is_empty(self) -> bool:
         return self.repository.is_empty()
 
-    def load_demo_data(self) -> None:
-        from typerapp_core.demo import seed_demo_data
-
-        seed_demo_data(self.repository, now=self.now())
-        self._rules = None
-        matchday = self.current_matchday()
-        if matchday is not None:
-            self.events.publish(MatchesUpdated(matchday_id=matchday.id))  # type: ignore[arg-type]
-        self.events.publish(ActivePlayerChanged(player=self.active_player()))
-        self.refresh_ranking()
+    # The demo is a mode of the Session, not data in this database. The two methods further
+    # down only clean up the demo league that earlier versions wrote into a real database.
 
     def remove_league(self, league: str, season: str) -> int:
         """Drop everything stored for one league: matchdays, matches and predictions."""

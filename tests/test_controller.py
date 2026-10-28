@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from typerapp_core.controller import TyperController
+from typerapp_core.demo import seed_demo_data
 from typerapp_core.events import (
     ActivePlayerChanged,
     Event,
@@ -327,14 +328,39 @@ def test_changing_the_rules_recomputes_the_ranking(
     assert controller.ranking()[0].points == 100
 
 
-def test_demo_data_can_be_loaded_from_the_menu(repo: Repository, bus: EventBus) -> None:
+def test_a_demo_league_left_in_a_real_database_can_still_be_cleaned_up(
+    repo: Repository, bus: EventBus
+) -> None:
+    # Earlier versions seeded the demo straight into the real database; the cleanup for that
+    # stays, while the demo itself is now a mode of the session (see test_session.py).
+    seed_demo_data(repo)
     controller = TyperController(repo, bus)
-    assert controller.is_empty()
+    assert controller.has_demo_data()
 
-    controller.load_demo_data()
+    controller.remove_demo_data()
 
-    assert not controller.is_empty()
-    assert controller.league() is not None
-    assert controller.current_matchday() is not None
-    assert controller.active_player() is not None
-    assert controller.ranking()[0].points > 0
+    assert not controller.has_demo_data()
+    assert controller.players() == []
+
+
+def test_a_matchday_whose_results_are_all_in_is_not_open(
+    controller: TyperController, matchday: Matchday, clock: Clock
+) -> None:
+    # The deadline is still ahead, but there is nothing left to predict.
+    assert controller.is_open(matchday.id)  # type: ignore[arg-type]
+
+    for match in controller.matches(matchday.id):  # type: ignore[arg-type]
+        controller.enter_result(match.id, Score(1, 0))  # type: ignore[arg-type]
+
+    assert clock.moment < controller.deadline(matchday.id)  # type: ignore[arg-type, operator]
+    assert not controller.is_open(matchday.id)  # type: ignore[arg-type]
+
+
+def test_a_matchday_with_one_match_left_is_still_open(
+    controller: TyperController, matchday: Matchday
+) -> None:
+    first = controller.matches(matchday.id)[0]  # type: ignore[arg-type]
+
+    controller.enter_result(first.id, Score(2, 2))  # type: ignore[arg-type]
+
+    assert controller.is_open(matchday.id)  # type: ignore[arg-type]

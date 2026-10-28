@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 from collections.abc import Awaitable, Callable
 from datetime import timedelta
 
@@ -21,6 +22,7 @@ from typerapp_core.events import EventBus
 from typerapp_core.models import MatchStatus, Score, ScoringRules, utc_now
 from typerapp_core.providers.base import ProviderUnavailable
 from typerapp_core.repository import Repository
+from typerapp_core.session import Session
 from typerapp_tui.app import TyperApp
 from typerapp_tui.screens.dialogs import ResultPrompt, parse_result
 from typerapp_tui.screens.main_menu import MainMenuScreen
@@ -93,10 +95,13 @@ def test_empty_database_offers_the_demo() -> None:
             assert "Wczytaj dane demo" in item_text(screen, "demo")
 
             await pilot.press("enter")
+            await app.workers.wait_for_complete()
             await pilot.pause()
 
+            assert app.demo
             assert not app.controller.is_empty()
             assert f"Typuj kolejkę {OPEN_MATCHDAY}" in item_text(screen, "matchday")
+            assert repository.is_empty()  # the real database got nothing out of it
         repository.close()
 
     run(scenario)
@@ -1088,6 +1093,368 @@ def test_the_menu_shows_a_logo() -> None:
         async with app.run_test():
             logo = str(app.screen.query_one("#logo").content)
             assert logo.count("\n") == 2  # three lines, whatever they draw
+        repository.close()
+
+    run(scenario)
+
+
+# ----------------------------------------------------------------- demo mode
+
+
+def build_session(*, rng_seed: int = 7) -> tuple[Repository, Session]:
+    """A real database with some data in it, and a session with a seeded simulation."""
+    repository = Repository()
+    seed_demo_data(repository)
+    controller = TyperController(repository, EventBus())
+    return repository, Session(controller, rng=random.Random(rng_seed))
+
+
+async def choose(pilot, key: str) -> None:
+    """Pick a main menu entry by its key, however many there are above it."""
+    menu = pilot.app.screen.query_one("#menu", ListView)
+    menu.index = [item.id for item in menu.children].index(f"menu-{key}")
+    await pilot.press("enter")
+    await pilot.app.workers.wait_for_complete()
+    await pilot.pause()
+
+
+def test_the_menu_offers_the_demo_next_to_real_data() -> None:
+    async def scenario() -> None:
+        repository, app = build()
+        async with app.run_test():
+            screen = app.screen
+            assert isinstance(screen, MainMenuScreen)
+            assert "Tryb demo" in item_text(screen, "demo")
+            assert not app.demo
+        repository.close()
+
+    run(scenario)
+
+
+def test_demo_mode_swaps_the_data_and_leaving_brings_it_back() -> None:
+    async def scenario() -> None:
+        repository, session = build_session()
+        app = TyperApp(session)
+        real = session.real
+        real_ranking = real.ranking()
+        async with app.run_test() as pilot:
+            await choose(pilot, "demo")
+
+            screen = app.screen
+            assert isinstance(screen, MainMenuScreen)
+            assert app.demo and app.controller is not real
+            assert "Wyłącz tryb demo" in item_text(screen, "leave_demo")
+            assert "TRYB DEMO" in str(screen.query_one("#brand").content)
+            assert app.has_class("-demo")
+
+            await choose(pilot, "leave_demo")
+
+            assert not app.demo and app.controller is real
+            assert real.ranking() == real_ranking  # nothing the demo did leaked back
+            assert "Tryb demo" in item_text(screen, "demo")
+            assert "TRYB DEMO" not in str(screen.query_one("#brand").content)
+            assert not app.has_class("-demo")
+        repository.close()
+
+    run(scenario)
+
+
+def test_the_demo_tints_every_screen() -> None:
+    async def scenario() -> None:
+        repository, session = build_session()
+        app = TyperApp(session)
+        async with app.run_test() as pilot:
+            assert app.screen.styles.border_top[0] == ""  # not in demo: plain
+
+            await choose(pilot, "demo")
+            assert app.screen.styles.border_top[0] == "tall"
+
+            await choose(pilot, "settings")
+            assert isinstance(app.screen, SettingsScreen)
+            assert app.screen.styles.border_top[0] == "tall"
+        repository.close()
+
+    run(scenario)
+
+
+def test_the_demo_flag_starts_in_demo_mode() -> None:
+    async def scenario() -> None:
+        repository, session = build_session()
+        session.enter_demo()  # what ``--demo`` does before the app starts
+        app = TyperApp(session)
+        async with app.run_test():
+            screen = app.screen
+            assert isinstance(screen, MainMenuScreen)
+            assert app.demo and app.has_class("-demo")
+            assert "TRYB DEMO" in str(screen.query_one("#brand").content)
+            assert "Wyłącz tryb demo" in item_text(screen, "leave_demo")
+        repository.close()
+
+    run(scenario)
+
+
+def test_the_demo_arguments_are_parsed() -> None:
+    from typerapp_tui.__main__ import parse_args
+
+    assert parse_args(["--demo"]).demo is True
+    assert parse_args([]).demo is False
+
+
+def test_typing_in_the_demo_does_not_touch_the_real_predictions() -> None:
+    async def scenario() -> None:
+        repository, session = build_session()
+        app = TyperApp(session)
+        before = len(repository.predictions())
+        async with app.run_test() as pilot:
+            await choose(pilot, "demo")
+            await choose(pilot, "matchday")
+            await pilot.press("2", "1")
+            await pilot.pause()
+
+            assert len(app.controller.repository.predictions()) > 0
+            assert len(repository.predictions()) == before
+        repository.close()
+
+    run(scenario)
+
+
+def test_the_demo_opens_on_a_matchday_that_can_be_predicted() -> None:
+    async def scenario() -> None:
+        repository, session = build_session()
+        app = TyperApp(session)
+        async with app.run_test() as pilot:
+            await choose(pilot, "demo")
+            await choose(pilot, "matchday")
+
+            rows = list(app.screen.query(MatchRow))
+            assert len(rows) == 5
+            assert all(row.editable for row in rows)
+        repository.close()
+
+    run(scenario)
+
+
+def test_the_simulation_key_is_hidden_outside_the_demo() -> None:
+    async def scenario() -> None:
+        repository, app = build()
+        async with app.run_test() as pilot:
+            await pilot.press("enter")
+            await pilot.pause()
+
+            assert isinstance(app.screen, MatchdayScreen)
+            assert app.screen.check_action("simulate", ()) is False
+
+            await pilot.press("r")
+            await pilot.pause()
+            assert all(
+                match.status is MatchStatus.SCHEDULED
+                for match in app.controller.matches(app.screen.matchday_id)
+            )
+        repository.close()
+
+    run(scenario)
+
+
+def play_matchday(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run the simulation fast enough for a test, without changing what it does."""
+    monkeypatch.setattr("typerapp_tui.screens.matchday.SIMULATION_STEP", 0.03)
+
+
+async def wait_until_played(pilot, matchday_id: int) -> None:
+    for _ in range(80):
+        await pilot.pause(0.05)
+        matches = pilot.app.controller.matches(matchday_id)
+        if all(match.is_settled for match in matches):
+            return
+    raise AssertionError("the simulation did not finish")
+
+
+def test_the_simulation_plays_the_matchday_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    play_matchday(monkeypatch)
+
+    async def scenario() -> None:
+        repository, session = build_session()
+        app = TyperApp(session)
+        async with app.run_test() as pilot:
+            await choose(pilot, "demo")
+            await choose(pilot, "matchday")
+            screen = app.screen
+            assert isinstance(screen, MatchdayScreen)
+            assert screen.check_action("simulate", ()) is True
+            before = [(e.player_id, e.points) for e in app.controller.ranking()]
+
+            await pilot.press("r")
+            await wait_until_played(pilot, screen.matchday_id)
+            await pilot.pause()
+
+            rows = list(screen.query(MatchRow))
+            assert all(not row.editable for row in rows)
+            assert all(row.match.is_settled for row in rows)
+            assert [(e.player_id, e.points) for e in app.controller.ranking()] != before
+        repository.close()
+
+    run(scenario)
+
+
+def test_the_simulation_does_not_start_twice(monkeypatch: pytest.MonkeyPatch) -> None:
+    play_matchday(monkeypatch)
+
+    async def scenario() -> None:
+        repository, session = build_session()
+        app = TyperApp(session)
+        async with app.run_test() as pilot:
+            await choose(pilot, "demo")
+            await choose(pilot, "matchday")
+            screen = app.screen
+            assert isinstance(screen, MatchdayScreen)
+
+            await pilot.press("r", "r", "r")
+            await wait_until_played(pilot, screen.matchday_id)
+            await pilot.pause()
+            await pilot.press("r")  # nothing left to play
+            await pilot.pause()
+
+            assert screen._simulating == []
+        repository.close()
+
+    run(scenario)
+
+
+def test_the_ranking_shows_what_moved_while_you_were_elsewhere(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    play_matchday(monkeypatch)
+
+    async def scenario() -> None:
+        repository, session = build_session()
+        app = TyperApp(session)
+        async with app.run_test() as pilot:
+            await choose(pilot, "demo")
+            await choose(pilot, "ranking")  # look at the table once...
+            assert all(row.delta == 0 for row in app.screen.query(RankingRow))
+            await pilot.press("escape")
+            await pilot.pause()
+
+            await choose(pilot, "matchday")  # ...play the matchday out...
+            screen = app.screen
+            await pilot.press("r")
+            await wait_until_played(pilot, screen.matchday_id)
+            await pilot.press("escape")
+            await pilot.pause()
+
+            await choose(pilot, "ranking")  # ...and the table remembers where it was
+            rows = list(app.screen.query(RankingRow))
+            assert any(row.delta != 0 for row in rows)
+            assert sorted(row.entry.position for row in rows)[0] == 1
+        repository.close()
+
+    run(scenario)
+
+
+def test_the_ranking_starts_over_from_the_demo_standings() -> None:
+    async def scenario() -> None:
+        repository, session = build_session()
+        app = TyperApp(session)
+        async with app.run_test() as pilot:
+            real_positions = {e.player_id: e.position for e in app.controller.ranking()}
+            assert app.ranking_positions == {None: real_positions}
+
+            await choose(pilot, "demo")
+
+            demo_positions = {e.player_id: e.position for e in app.controller.ranking()}
+            assert app.ranking_positions == {None: demo_positions}  # not the real game's
+
+            await choose(pilot, "leave_demo")
+            assert app.ranking_positions == {None: real_positions}
+        repository.close()
+
+    run(scenario)
+
+
+def test_the_first_look_at_the_ranking_after_a_simulation_shows_movement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The path a demo takes: switch it on, type, play the matchday, open the table. There is
+    # no earlier visit to the ranking to compare with, so the baseline has to come from the
+    # moment the demo started.
+    play_matchday(monkeypatch)
+
+    async def scenario() -> None:
+        repository, session = build_session()
+        app = TyperApp(session)
+        async with app.run_test() as pilot:
+            await choose(pilot, "demo")
+            await choose(pilot, "matchday")
+            screen = app.screen
+            await pilot.press("r")
+            await wait_until_played(pilot, screen.matchday_id)
+            await pilot.press("escape")
+            await pilot.pause()
+
+            await choose(pilot, "ranking")
+
+            assert any(row.delta != 0 for row in app.screen.query(RankingRow))
+        repository.close()
+
+    run(scenario)
+
+
+def test_a_played_matchday_is_no_longer_called_open(monkeypatch: pytest.MonkeyPatch) -> None:
+    play_matchday(monkeypatch)
+
+    async def scenario() -> None:
+        repository, session = build_session()
+        app = TyperApp(session)
+        async with app.run_test() as pilot:
+            await choose(pilot, "demo")
+            await choose(pilot, "matchday")
+            screen = app.screen
+            assert "zamknięcie typowania za" in str(screen.query_one("#matchday-countdown").content)
+
+            await pilot.press("r")
+            await wait_until_played(pilot, screen.matchday_id)
+            screen._refresh_countdown()  # it also ticks on its own once a second
+
+            assert "zamknięte" in str(screen.query_one("#matchday-countdown").content)
+            await pilot.press("escape")
+            await pilot.pause()
+            assert "zamknięta" in str(app.screen._labels["matchday"].content)
+        repository.close()
+
+    run(scenario)
+
+
+def test_syncing_in_the_demo_explains_itself() -> None:
+    async def scenario() -> None:
+        repository, session = build_session()
+        app = TyperApp(session)
+        async with app.run_test() as pilot:
+            await choose(pilot, "demo")
+
+            assert not app.controller.can_sync()
+            assert "demo" in app._why_not()
+        repository.close()
+
+    run(scenario)
+
+
+def test_the_settings_hide_the_league_keys_in_the_demo() -> None:
+    async def scenario() -> None:
+        repository, session = build_session()
+        app = TyperApp(session)
+        async with app.run_test() as pilot:
+            await choose(pilot, "settings")
+            assert app.screen.check_action("pick_league", ()) is True
+            assert app.screen.check_action("remove_league_data", ()) is True
+            await pilot.press("escape")
+            await pilot.pause()
+
+            await choose(pilot, "demo")
+            await choose(pilot, "settings")
+
+            assert app.screen.check_action("pick_league", ()) is False
+            assert app.screen.check_action("remove_league_data", ()) is False
+            assert "tryb demo" in str(app.screen.query_one("#settings-source").content)
         repository.close()
 
     run(scenario)

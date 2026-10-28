@@ -197,6 +197,18 @@ def _guess(rng: random.Random, result: Score | None, skill: float) -> Score:
     return Score(rng.randint(0, 3), rng.randint(0, 3))
 
 
+#: How often a team scores 0, 1, 2, 3 or 4 goals: roughly a league season, so simulated
+#: results read like real ones instead of 7:5 and 0:0 in equal measure.
+GOAL_WEIGHTS = (27, 33, 24, 11, 5)
+
+
+def simulated_score(rng: random.Random) -> Score:
+    """A plausible final score, for playing a demo matchday without waiting for real ones."""
+    goals = range(len(GOAL_WEIGHTS))
+    home, away = (rng.choices(goals, weights=GOAL_WEIGHTS)[0] for _ in range(2))
+    return Score(home, away)
+
+
 def _same_outcome(result: Score) -> Score:
     """A different score that still gets the winner right."""
     if result.outcome is Outcome.HOME_WIN:

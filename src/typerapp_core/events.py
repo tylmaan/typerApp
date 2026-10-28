@@ -74,6 +74,13 @@ class SettingsChanged(Event):
 
 
 @dataclass(frozen=True, slots=True)
+class DemoModeChanged(Event):
+    """Demo mode was switched on or off, so everything on screen is from another database."""
+
+    active: bool
+
+
+@dataclass(frozen=True, slots=True)
 class SyncStarted(Event):
     source: str
 

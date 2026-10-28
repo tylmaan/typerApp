@@ -61,8 +61,22 @@ matchdays at a time and caches everything in SQLite.
 - `W` types a result in by hand, which is how the app works with no key and no network.
 - `L` picks the league, `D` clears the data of the one that is active.
 
-Without a key the app still runs on cached data, hand-typed results and the demo seed, which
-fills an empty database with two matchdays and five players.
+### Demo mode
+
+```bash
+uv run python -m typerapp_tui --demo
+```
+
+The same mode is the "Tryb demo" entry in the menu. It builds a fresh game in memory every
+time it is switched on: five players, last matchday played and predicted by all of them, the
+next one open. Press `R` on the matchday screen to play it out match by match and watch the
+points land and the leaderboard move. Nothing is written to disk, so switching it off brings
+back the real data untouched, and the demo can never go stale.
+
+![A demo matchday after it was played out](docs/screenshots/kolejka-rozegrana.svg)
+
+Without a key the app still runs on cached data and hand-typed results, and the demo mode
+needs no network at all.
 
 ![Settings](docs/screenshots/ustawienia.svg)
 

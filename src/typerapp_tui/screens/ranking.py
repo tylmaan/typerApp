@@ -36,9 +36,15 @@ class RankingScreen(Screen[None]):
         self._scope = 0
         self._initial_scope = matchday_id
         self._cancels: list = []
-        #: Positions currently on screen, per table, so ▲▼ always describes what the player
-        #: can see rather than whatever the controller happened to compute last.
-        self._positions: dict[int | None, dict[int, int]] = {}
+
+    @property
+    def _positions(self) -> dict[int | None, dict[int, int]]:
+        """Positions the player last saw, per table, kept by the app rather than the screen.
+
+        That way ▲▼ means "since you last looked": results that came in while another screen
+        was open still show up here as movement the next time the ranking is opened.
+        """
+        return cast("TyperApp", self.app).ranking_positions
 
     @property
     def controller(self) -> TyperController:

@@ -18,6 +18,7 @@ from textual.widgets import Footer, Label, ListItem, ListView, Static
 
 from typerapp_core.events import (
     ActivePlayerChanged,
+    DemoModeChanged,
     MatchesUpdated,
     PredictionSaved,
     RankingChanged,
@@ -32,6 +33,8 @@ from typerapp_tui.screens.settings import SettingsScreen
 if TYPE_CHECKING:
     from typerapp_core.controller import TyperController
     from typerapp_tui.app import TyperApp
+
+DEMO_HINT = "pięciu graczy, dwie kolejki · nic nie zostaje na dysku"
 
 #: Drawn with box characters rather than letters, so it stays three lines tall.
 LOGO = "\n".join(
@@ -62,6 +65,10 @@ class MainMenuScreen(Screen[None]):
     def controller(self) -> TyperController:
         return cast("TyperApp", self.app).controller
 
+    @property
+    def _demo(self) -> bool:
+        return cast("TyperApp", self.app).demo
+
     def compose(self) -> ComposeResult:
         yield Static(LOGO, id="logo")
         yield Static(id="brand")
@@ -80,6 +87,7 @@ class MainMenuScreen(Screen[None]):
             bridge.subscribe(RankingChanged, lambda _: self._refresh_hints()),
             bridge.subscribe(PredictionSaved, lambda _: self._refresh_hints()),
             bridge.subscribe(MatchesUpdated, lambda _: self._refresh_hints()),
+            bridge.subscribe(DemoModeChanged, lambda _: self._rebuild_later()),
         ]
         await self._rebuild()
 
@@ -91,6 +99,8 @@ class MainMenuScreen(Screen[None]):
 
     def _entries(self) -> list[tuple[str, str]]:
         if self.controller.is_empty():
+            # Nothing of the player's own yet: the demo is the way to see the app working,
+            # and it stays in memory, so the database is still empty when it is left.
             return [
                 ("demo", "Wczytaj dane demo"),
                 ("add", "Dodaj gracza"),
@@ -101,8 +111,13 @@ class MainMenuScreen(Screen[None]):
             ("ranking", "Ranking"),
             ("profile", "Mój profil"),
             ("settings", "Ustawienia"),
+            ("leave_demo", "Wyłącz tryb demo") if self._demo else ("demo", "Tryb demo"),
             ("quit", "Wyjście"),
         ]
+
+    def _rebuild_later(self) -> None:
+        """Demo mode was switched: every entry and every hint now describes another game."""
+        self.run_worker(self._rebuild(), exclusive=True, group="menu")
 
     async def _rebuild(self) -> None:
         """Replace the entries. Clearing a ListView is asynchronous, hence the await."""
@@ -130,8 +145,9 @@ class MainMenuScreen(Screen[None]):
     def _refresh_brand(self) -> None:
         league = self.controller.league()
         where = f"{league[0]} {league[1]}" if league else "brak ligi"
+        badge = "[black on #f2c744] TRYB DEMO [/] " if self._demo else ""
         self.query_one("#brand", Static).update(
-            f"[dim]typowanie wyników w gronie znajomych ·[/dim] [b]{escape(where)}[/b]"
+            f"{badge}[dim]typowanie wyników w gronie znajomych ·[/dim] [b]{escape(where)}[/b]"
         )
 
     def _refresh_player(self) -> None:
@@ -150,13 +166,14 @@ class MainMenuScreen(Screen[None]):
     def _hints(self) -> dict[str, str]:
         controller = self.controller
         if controller.is_empty():
-            return {
-                "demo": "pięciu graczy, dwie kolejki, gotowy ranking",
-                "add": "zacznij z czystą bazą",
-            }
+            return {"demo": DEMO_HINT, "add": "zacznij z czystą bazą"}
 
         matchday = controller.current_matchday()
-        hints = {"matchday": "brak terminarza"}
+        hints = {
+            "matchday": "brak terminarza",
+            "demo": DEMO_HINT,
+            "leave_demo": "wróć do swoich danych, demo przepada",
+        }
         if matchday is not None and matchday.id is not None:
             number = matchday.number
             self._texts["matchday"] = f"Typuj kolejkę {number}"
@@ -199,9 +216,12 @@ class MainMenuScreen(Screen[None]):
         elif key == "settings":
             self.app.push_screen(SettingsScreen())
         elif key == "demo":
-            self.controller.load_demo_data()
-            await self._rebuild()
-            self.notify("Wczytano dane demo")
+            # The session announces the change, and the menu rebuilds itself on that event.
+            cast("TyperApp", self.app).session.enter_demo()
+            self.notify("Tryb demo: dane są świeże i nie zapisują się na dysku")
+        elif key == "leave_demo":
+            cast("TyperApp", self.app).session.leave_demo()
+            self.notify("Wróciłeś do swoich danych")
         elif key == "add":
             self.app.push_screen(NamePrompt("Jak się nazywasz?", "imię gracza"), self._add_player)
         elif key == "quit":

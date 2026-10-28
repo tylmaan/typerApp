@@ -106,12 +106,29 @@ class SettingsScreen(Screen[None]):
     async def on_mount(self) -> None:
         await self._reload_players()
         self._refresh_source()
+        if cast("TyperApp", self.app).demo:
+            # No league to pick and no real data to clear while the demo is on.
+            self.query_one("#hints", Static).update(
+                "↑↓ opcja · +− lub ←→ zmień · 0-9 wpisz · A dodaj gracza"
+                " · U usuń gracza · R domyślne"
+            )
         rows = list(self.query(SettingRow))
         if rows:
             rows[0].focus()
 
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        """The league and its data belong to the real game, so the demo hides both keys."""
+        if action in ("pick_league", "remove_league_data"):
+            return not cast("TyperApp", self.app).demo
+        return True
+
     def _refresh_source(self) -> None:
         controller = self.controller
+        if cast("TyperApp", self.app).demo:
+            self.query_one("#settings-source", Static).update(
+                "[b]tryb demo[/b]   [dim]świeże dane w pamięci, nic nie jest zapisywane[/dim]"
+            )
+            return
         league = controller.league()
         where = f"{league[0]} {league[1]}" if league else "nie wybrano ligi"
         source = controller.provider.name if controller.can_sync() else "ręcznie wpisywane"

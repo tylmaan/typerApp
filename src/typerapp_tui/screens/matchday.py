@@ -39,6 +39,9 @@ if TYPE_CHECKING:
 SOON = timedelta(hours=1)
 URGENT = timedelta(minutes=5)
 
+#: Seconds between two simulated matches, long enough to watch the points count up.
+SIMULATION_STEP = 1.0
+
 
 class MatchdayScreen(Screen[None]):
     BINDINGS = [
@@ -46,6 +49,7 @@ class MatchdayScreen(Screen[None]):
         Binding("j", "joker", "Joker"),
         Binding("w", "enter_result", "Wpisz wynik"),
         Binding("s", "sync", "Pobierz wyniki"),
+        Binding("r", "simulate", "Rozegraj kolejkę"),
         Binding("p", "pick_player", "Gracz"),
         Binding("shift+right", "next_matchday", "Następna kolejka"),
         Binding("shift+left", "previous_matchday", "Poprzednia kolejka", show=False),
@@ -65,6 +69,8 @@ class MatchdayScreen(Screen[None]):
         self._matchdays: list = []
         #: Points waiting to be counted up on a row, once that row exists.
         self._pending_award: tuple[int, int] | None = None
+        #: Matches still to be played by the demo simulation, in kickoff order.
+        self._simulating: list[int] = []
 
     @property
     def controller(self) -> TyperController:
@@ -306,6 +312,38 @@ class MatchdayScreen(Screen[None]):
 
     def action_sync(self) -> None:
         cast("TyperApp", self.app).sync_now()
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        """Simulating only makes sense in demo mode, so everywhere else the key is hidden."""
+        if action == "simulate":
+            return cast("TyperApp", self.app).demo
+        return True
+
+    def action_simulate(self) -> None:
+        """Demo only: play the matchday out one match at a time.
+
+        Each result goes through the controller like a real one, so the player watches the
+        points count up on the rows, and the leaderboard is reshuffled by the time they look.
+        """
+        if not cast("TyperApp", self.app).demo or self._simulating:
+            return
+        pending = [
+            match.id
+            for match in self.controller.matches(self.matchday_id)
+            if match.status is MatchStatus.SCHEDULED and match.id is not None
+        ]
+        if not pending:
+            self.notify("Wszystkie mecze tej kolejki są już rozegrane", severity="information")
+            return
+        self._simulating = pending
+        self.set_interval(SIMULATION_STEP, self._simulation_step, repeat=len(pending))
+
+    def _simulation_step(self) -> None:
+        if not self._simulating:
+            return
+        cast("TyperApp", self.app).session.simulate_result(self._simulating.pop(0))
+        if not self._simulating:
+            self.notify("Kolejka rozegrana · sprawdź ranking (Esc, potem Ranking)")
 
     def action_next_matchday(self) -> None:
         self._switch_matchday(1)
