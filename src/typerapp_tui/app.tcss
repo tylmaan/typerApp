@@ -330,3 +330,28 @@ SettingRow > .settingrow--hint {
 TyperApp.-demo Screen {
     border-top: tall #f2c744;
 }
+
+/* ------------------------------------------------------------ match statuses */
+
+MatchRow > .matchrow--state-scheduled {
+    color: $muted;
+}
+
+MatchRow > .matchrow--state-live {
+    color: $joker;
+    text-style: bold;
+}
+
+MatchRow > .matchrow--state-finished {
+    color: $pitch;
+}
+
+MatchRow > .matchrow--state-void {
+    color: #e06c6c;
+}
+
+/* Predictions are closed: red, so it cannot be mistaken for the ticking countdown. */
+#matchday-countdown.-closed {
+    color: #e06c6c;
+    text-style: bold;
+}

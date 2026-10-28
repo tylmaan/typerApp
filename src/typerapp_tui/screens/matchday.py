@@ -173,14 +173,16 @@ class MatchdayScreen(Screen[None]):
         controller = self.controller
         countdown = self.query_one("#matchday-countdown", Static)
         left = controller.time_left(self.matchday_id)
-        if controller.is_open(self.matchday_id) and left is not None:
+        closed = not (controller.is_open(self.matchday_id) and left is not None)
+        if closed:
+            countdown.update("[b]typowanie zamknięte[/b]")
+            soon = urgent = False
+        else:
             countdown.update(f"zamknięcie typowania za [b]{format_countdown(left)}[/b]")
             soon = left <= SOON
             urgent = left <= URGENT
-        else:
-            countdown.update("[b]typowanie zamknięte[/b]")
-            soon = urgent = False
 
+        countdown.set_class(closed, "-closed")
         countdown.set_class(soon and not urgent, "-soon")
         countdown.set_class(urgent, "-urgent")
         if urgent:

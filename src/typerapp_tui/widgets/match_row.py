@@ -17,8 +17,8 @@ from textual.reactive import reactive
 from textual.timer import Timer
 from textual.widget import Widget
 
-from typerapp_core.models import Match, Prediction
-from typerapp_tui.formatting import format_kickoff, format_score
+from typerapp_core.models import Match, MatchStatus, Prediction
+from typerapp_tui.formatting import STATUS_WIDTH, format_kickoff, format_score, format_status
 
 HOME, AWAY = 0, 1
 
@@ -32,6 +32,16 @@ FIELD_WIDTH = 3
 #: Where the home field starts in the rendered line, used to turn a click into a field.
 HOME_FIELD_COLUMN = TIME_WIDTH + 1 + TEAM_WIDTH + 1
 AWAY_FIELD_COLUMN = HOME_FIELD_COLUMN + FIELD_WIDTH + 1
+
+#: Which colour a status is drawn in. A match that will not be played, because it was put off
+#: or called off, shares one.
+STATE_CLASS = {
+    MatchStatus.SCHEDULED: "scheduled",
+    MatchStatus.LIVE: "live",
+    MatchStatus.FINISHED: "finished",
+    MatchStatus.POSTPONED: "void",
+    MatchStatus.CANCELLED: "void",
+}
 
 #: How long the points take to count up after a match is settled.
 COUNT_DURATION = 0.45
@@ -49,6 +59,10 @@ class MatchRow(Widget):
         "matchrow--joker",
         "matchrow--status",
         "matchrow--points",
+        "matchrow--state-scheduled",
+        "matchrow--state-live",
+        "matchrow--state-finished",
+        "matchrow--state-void",
     }
 
     field: reactive[int] = reactive(HOME)
@@ -154,6 +168,10 @@ class MatchRow(Widget):
         row.append(":", team_style)
         row.append_text(self._field(AWAY))
         row.append(f" {_clip(self.match.away_team):<{TEAM_WIDTH}}", team_style)
+        row.append(
+            f"  {format_status(self.match.status):<{STATUS_WIDTH}}",
+            self.get_component_rich_style(f"matchrow--state-{STATE_CLASS[self.match.status]}"),
+        )
         row.append_text(self._trailing())
         return row
 
@@ -181,8 +199,6 @@ class MatchRow(Widget):
             trailing.append("  ★ joker", self.get_component_rich_style("matchrow--joker"))
         if self.saved:
             trailing.append("  ✔", self.get_component_rich_style("matchrow--status"))
-        elif not self.editable:
-            trailing.append("  zamknięte", self.get_component_rich_style("matchrow--status"))
         return trailing
 
     def on_click(self, event: events.Click) -> None:

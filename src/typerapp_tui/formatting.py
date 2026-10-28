@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+from typerapp_core.models import MatchStatus
+
 #: Monday first, matching ``datetime.weekday()``.
 WEEKDAYS = ("pon", "wt", "śr", "czw", "pt", "sob", "nd")
 
@@ -36,6 +38,23 @@ def format_score(home: int | None, away: int | None, placeholder: str = "·") ->
     left = placeholder if home is None else str(home)
     right = placeholder if away is None else str(away)
     return f"{left}:{right}"
+
+
+#: How a match is said to be doing, in the words the player sees next to it.
+STATUS_LABELS: dict[MatchStatus, str] = {
+    MatchStatus.SCHEDULED: "zaplanowany",
+    MatchStatus.LIVE: "trwa",
+    MatchStatus.FINISHED: "zakończony",
+    MatchStatus.POSTPONED: "przełożony",
+    MatchStatus.CANCELLED: "odwołany",
+}
+
+#: The widest label, so a column of them lines up.
+STATUS_WIDTH = max(len(label) for label in STATUS_LABELS.values())
+
+
+def format_status(status: MatchStatus) -> str:
+    return STATUS_LABELS[status]
 
 
 def plural(count: int, one: str, few: str, many: str) -> str:

@@ -4,11 +4,15 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from typerapp_core.models import MatchStatus
 from typerapp_tui.formatting import (
+    STATUS_LABELS,
+    STATUS_WIDTH,
     format_countdown,
     format_decimal,
     format_kickoff,
     format_score,
+    format_status,
     plural_matches,
     plural_predictions,
 )
@@ -72,3 +76,22 @@ def test_format_kickoff_shows_a_polish_weekday() -> None:
 
     assert formatted.startswith(("sob", "nd"))  # depends on the machine's timezone
     assert "07.11" in formatted or "08.11" in formatted
+
+
+@pytest.mark.parametrize(
+    ("status", "label"),
+    [
+        (MatchStatus.SCHEDULED, "zaplanowany"),
+        (MatchStatus.LIVE, "trwa"),
+        (MatchStatus.FINISHED, "zakończony"),
+        (MatchStatus.POSTPONED, "przełożony"),
+        (MatchStatus.CANCELLED, "odwołany"),
+    ],
+)
+def test_every_status_has_a_label(status: MatchStatus, label: str) -> None:
+    assert format_status(status) == label
+
+
+def test_every_status_is_covered_and_the_column_fits_the_widest() -> None:
+    assert set(STATUS_LABELS) == set(MatchStatus)  # a new status cannot go without a label
+    assert max(len(label) for label in STATUS_LABELS.values()) == STATUS_WIDTH

@@ -13,6 +13,7 @@ from collections.abc import Awaitable, Callable
 from datetime import timedelta
 
 import pytest
+from textual.color import Color
 from textual.widgets import Label, ListItem, ListView
 
 from typerapp_core.controller import TyperController, season_for
@@ -1836,6 +1837,149 @@ def test_the_simulation_finishes_however_many_timer_ticks_arrive(
                 screen._simulation_step()
             assert screen._simulating == [] and screen._simulation_timer is None
             assert app.controller.is_finished(screen.matchday_id)
+        repository.close()
+
+    run(scenario)
+
+
+# --------------------------------------------------------- match statuses and colours
+
+
+def row_text(row: MatchRow) -> str:
+    """What a row shows, as plain text."""
+    return row.render().plain
+
+
+def test_every_match_shows_its_status() -> None:
+    async def scenario() -> None:
+        repository, session = build_session()
+        app = TyperApp(session)
+        async with app.run_test() as pilot:
+            await choose(pilot, "demo")
+            await choose(pilot, "matchday")
+            rows = list(app.screen.query(MatchRow))
+            assert len(rows) == 5
+            assert all("zaplanowany" in row_text(row) for row in rows)
+
+            await pilot.press("[")  # the matchday that was already played
+            await pilot.pause()
+            played = list(app.screen.query(MatchRow))
+            assert all("zakończony" in row_text(row) for row in played)
+            assert all(str(row.match.score) in row_text(row) for row in played)
+        repository.close()
+
+    run(scenario)
+
+
+def test_a_status_that_changes_is_shown_at_once() -> None:
+    async def scenario() -> None:
+        repository, session = build_session()
+        app = TyperApp(session)
+        async with app.run_test() as pilot:
+            await choose(pilot, "demo")
+            await choose(pilot, "matchday")
+            screen = app.screen
+            first, second, third = list(screen.query(MatchRow))[:3]
+
+            app.controller.enter_result(first.match_id, None, MatchStatus.LIVE)
+            app.controller.enter_result(second.match_id, None, MatchStatus.POSTPONED)
+            app.controller.enter_result(third.match_id, None, MatchStatus.CANCELLED)
+            await pilot.pause()
+
+            assert "trwa" in row_text(first)
+            assert "przełożony" in row_text(second)
+            assert "odwołany" in row_text(third)
+            assert "zaplanowany" not in row_text(first)  # the old label is gone, not appended to
+        repository.close()
+
+    run(scenario)
+
+
+def test_statuses_share_a_column_so_the_rows_line_up() -> None:
+    async def scenario() -> None:
+        repository, session = build_session()
+        app = TyperApp(session)
+        async with app.run_test() as pilot:
+            await choose(pilot, "demo")
+            await choose(pilot, "matchday")
+            screen = app.screen
+            rows = list(screen.query(MatchRow))
+            app.controller.enter_result(rows[0].match_id, None, MatchStatus.LIVE)
+            app.controller.enter_result(rows[1].match_id, None, MatchStatus.CANCELLED)
+            await pilot.pause()
+
+            starts = {
+                row_text(row).index(label)
+                for row, label in zip(rows[:3], ("trwa", "odwołany", "zaplanowany"), strict=True)
+            }
+            assert len(starts) == 1  # whatever the word, it starts in the same column
+        repository.close()
+
+    run(scenario)
+
+
+def test_closed_predictions_are_shown_in_red() -> None:
+    async def scenario() -> None:
+        repository, session = build_session()
+        app = TyperApp(session)
+        async with app.run_test() as pilot:
+            await choose(pilot, "demo")
+            await choose(pilot, "matchday")
+            screen = app.screen
+            countdown = screen.query_one("#matchday-countdown")
+            assert not countdown.has_class("-closed")
+            assert countdown.styles.color != Color.parse("#e06c6c")
+
+            deadline = app.controller.deadline(screen.matchday_id)
+            app.controller.clock = lambda: deadline + timedelta(minutes=1)
+            screen._refresh_countdown()
+
+            assert "typowanie zamknięte" in str(countdown.content)
+            assert countdown.has_class("-closed")
+            assert not countdown.has_class("-soon") and not countdown.has_class("-urgent")
+            assert countdown.styles.color == Color.parse("#e06c6c")
+        repository.close()
+
+    run(scenario)
+
+
+def test_a_finished_matchday_is_closed_in_red_too() -> None:
+    async def scenario() -> None:
+        repository, session = build_session()
+        app = TyperApp(session)
+        async with app.run_test() as pilot:
+            await choose(pilot, "demo")
+            await choose(pilot, "matchday")
+            await pilot.press("[")
+            await pilot.pause()
+
+            countdown = app.screen.query_one("#matchday-countdown")
+
+            assert "typowanie zamknięte" in str(countdown.content)
+            assert countdown.has_class("-closed")
+        repository.close()
+
+    run(scenario)
+
+
+def test_the_red_goes_away_when_predictions_are_open_again() -> None:
+    async def scenario() -> None:
+        repository, session = build_session()
+        app = TyperApp(session)
+        async with app.run_test() as pilot:
+            await choose(pilot, "demo")
+            await choose(pilot, "matchday")
+            screen = app.screen
+            countdown = screen.query_one("#matchday-countdown")
+            await pilot.press("[")  # a finished one: red
+            await pilot.pause()
+            assert countdown.has_class("-closed")
+
+            await pilot.press("]")  # and back to the open one
+            await pilot.pause()
+
+            assert not countdown.has_class("-closed")
+            assert "zamknięcie typowania za" in str(countdown.content)
         repository.close()
 
     run(scenario)
