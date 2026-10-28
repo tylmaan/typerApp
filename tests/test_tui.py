@@ -19,7 +19,7 @@ from typerapp_core.controller import TyperController, season_for
 from typerapp_core.demo import LEAGUE as DEMO_LEAGUE
 from typerapp_core.demo import OPEN_MATCHDAY, PLAYED_MATCHDAY, seed_demo_data
 from typerapp_core.events import EventBus
-from typerapp_core.models import MatchStatus, Score, ScoringRules, utc_now
+from typerapp_core.models import Matchday, MatchStatus, Score, ScoringRules, utc_now
 from typerapp_core.providers.base import ProviderUnavailable
 from typerapp_core.repository import Repository
 from typerapp_core.session import Session
@@ -859,9 +859,32 @@ def test_switching_shows_the_other_matchdays_matches() -> None:
     run(scenario)
 
 
-def test_the_league_picker_offers_the_demo_league() -> None:
+BIG_FIVE_AND_CHAMPIONS_LEAGUE = [
+    "Premier League",
+    "Serie A",
+    "La Liga",
+    "Bundesliga",
+    "Ligue 1",
+    "Liga Mistrzów",
+]
+
+
+def picker_names(app: TyperApp) -> list[str]:
+    """The league names in the open picker, with the season tag stripped off."""
+    return [
+        str(item.query_one(Label).content).split("  [dim]")[0].lstrip("▸ ").strip()
+        for item in app.screen.query_one("#league-list", ListView).children
+    ]
+
+
+def test_the_league_picker_offers_only_the_big_five_and_the_champions_league() -> None:
     async def scenario() -> None:
+        # The database holds the old demo league too, and leagues from earlier clicking.
         repository, app = build(provider=FakeProvider(current=None))
+        repository.upsert_matchday(
+            Matchday(league="Mistrzostwa świata", season="2026/27", number=2)
+        )
+        repository.upsert_matchday(Matchday(league="Eredivisie", season="2026/27", number=4))
         async with app.run_test() as pilot:
             await pilot.press("down", "down", "down", "enter")  # settings
             await pilot.pause()
@@ -869,38 +892,39 @@ def test_the_league_picker_offers_the_demo_league() -> None:
             await pilot.press("l")
             await pilot.pause()
 
-            labels = [
-                str(item.query_one(Label).content)
-                for item in app.screen.query_one("#league-list", ListView).children
-            ]
-            assert any(DEMO_LEAGUE in label for label in labels)
-            assert any("Premier League  [dim]PL" in label for label in labels)
+            assert picker_names(app) == BIG_FIVE_AND_CHAMPIONS_LEAGUE
         repository.close()
 
     run(scenario)
 
 
-def test_going_back_to_the_demo_league_is_possible() -> None:
+def test_a_stored_league_is_offered_for_the_season_it_was_stored_in() -> None:
     async def scenario() -> None:
         repository, app = build(provider=FakeProvider(current=None))
+        repository.upsert_matchday(Matchday(league="Serie A", season="2025/26", number=3))
         async with app.run_test() as pilot:
-            app.controller.set_league("Premier League", "2026/27")
             await pilot.press("down", "down", "down", "enter")
             await pilot.pause()
 
             await pilot.press("l")
             await pilot.pause()
+
+            names = picker_names(app)
+            assert names.count("Serie A") == 2  # last season's, and the current one
+            assert all(names.count(name) == 1 for name in names if name != "Serie A")
+
             listing = app.screen.query_one("#league-list", ListView)
-            index = next(
-                i
-                for i, item in enumerate(listing.children)
-                if DEMO_LEAGUE in str(item.query_one(Label).content)
+            older = next(
+                index
+                for index, item in enumerate(listing.children)
+                if "2025/26" in str(item.query_one(Label).content)
             )
-            listing.index = index
+            listing.index = older
             await pilot.press("enter")
+            await app.workers.wait_for_complete()
             await pilot.pause()
 
-            assert app.controller.league() == (DEMO_LEAGUE, DEMO_SEASON)
+            assert app.controller.league() == ("Serie A", "2025/26")
         repository.close()
 
     run(scenario)

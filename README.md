@@ -53,7 +53,9 @@ uv run python -m typerapp_tui
 ```
 
 Copy `.env.example` to `.env` and paste a football-data.org key into it. The free plan covers
-a dozen competitions and allows about ten requests a minute, so the app fetches three
+the five big leagues (Premier League, Serie A, La Liga, Bundesliga, Ligue 1) and the
+Champions League, which are the competitions the app offers. It allows about ten requests a
+minute, so the app fetches three
 matchdays at a time and caches everything in SQLite.
 
 - `S` fetches the previous, the current and the next matchday; the app also does it on

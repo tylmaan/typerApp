@@ -238,7 +238,33 @@ def test_competition_lookup() -> None:
     assert competition_code("PL") == "PL"
     assert competition_code("Ekstraklasa") is None
     assert competition_name("BL1") == "Bundesliga"
-    assert len(COMPETITIONS) == 12
+
+
+def test_only_the_big_five_and_the_champions_league_are_offered() -> None:
+    assert [code for code, _ in COMPETITIONS] == ["PL", "SA", "PD", "BL1", "FL1", "CL"]
+    assert [name for _, name in COMPETITIONS] == [
+        "Premier League",
+        "Serie A",
+        "La Liga",
+        "Bundesliga",
+        "Ligue 1",
+        "Liga Mistrzów",
+    ]
+
+
+@pytest.mark.parametrize("league", ["Eredivisie", "Primeira Liga", "Mistrzostwa świata", "WC"])
+def test_other_competitions_are_neither_chosen_nor_fetched(league: str) -> None:
+    # The API has them, but the app does not offer them: one list decides both things.
+    assert competition_code(league) is None
+    assert not ApiResultsProvider("key").supports(league)
+    with pytest.raises(CompetitionUnavailable):
+        answering(FIXTURE).fetch_matchday(league, "2026/27", 1)
+
+
+@pytest.mark.parametrize("league", [name for _, name in COMPETITIONS])
+def test_every_offered_competition_can_be_fetched(league: str) -> None:
+    assert ApiResultsProvider("key").supports(league)
+    assert answering(FIXTURE).fetch_matchday(league, "2026/27", 12)
 
 
 @pytest.mark.parametrize(

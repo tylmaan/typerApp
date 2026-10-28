@@ -28,20 +28,18 @@ API_KEY_HEADER = "X-Auth-Token"
 
 DEFAULT_TIMEOUT = 10.0
 
-#: Competitions of the free plan: code and the name shown in the settings.
+#: The competitions the app offers, as ``(API code, name shown to the player)``: the big five
+#: leagues and the Champions League, in the order the settings list them. All of them are on
+#: the free plan. The API has more (Eredivisie, the World Cup and so on), left out on purpose,
+#: and this one list is what both the league picker and the sync go by, so a league that is not
+#: here can neither be chosen nor fetched.
 COMPETITIONS: tuple[tuple[str, str], ...] = (
     ("PL", "Premier League"),
-    ("BL1", "Bundesliga"),
     ("SA", "Serie A"),
     ("PD", "La Liga"),
+    ("BL1", "Bundesliga"),
     ("FL1", "Ligue 1"),
-    ("DED", "Eredivisie"),
-    ("PPL", "Primeira Liga"),
-    ("ELC", "Championship"),
-    ("BSA", "Campeonato Brasileiro"),
     ("CL", "Liga Mistrzów"),
-    ("WC", "Mistrzostwa świata"),
-    ("EC", "Mistrzostwa Europy"),
 )
 
 #: The API's own status names, mapped onto the ones the game uses.

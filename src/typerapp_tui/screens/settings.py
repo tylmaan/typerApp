@@ -213,27 +213,24 @@ class SettingsScreen(Screen[None]):
         return int(item.id.removeprefix("settings-player-"))
 
     def _league_options(self) -> list[tuple[str, str, str]]:
-        """``(key, label, season)``: leagues already in the database, then the free plan.
+        """``(key, label, season)`` for every competition the app offers, in its own order.
 
-        Without the stored ones there would be no way back to the demo league, or to a
-        league fetched earlier, once something else was chosen.
+        A league already in the database is listed under the season it was stored for, so the
+        player can go back to it. The current season is always offered too, which is how a
+        league is started, and how one is carried on into a new season. Anything stored under
+        a name that is not one of :data:`COMPETITIONS` (a league picked in an earlier version)
+        is not offered any more.
         """
         controller = self.controller
-        season = season_for(controller.now())
+        current = season_for(controller.now())
+        stored: dict[str, set[str]] = {}
+        for league, season in controller.known_leagues():
+            stored.setdefault(league, set()).add(season)
+
         options: list[tuple[str, str, str]] = []
-        seen: set[str] = set()
-        for league, stored_season in controller.known_leagues():
-            options.append(
-                (
-                    f"{league}|{stored_season}",
-                    f"{escape(league)}  [dim]{stored_season}[/dim]",
-                    stored_season,
-                )
-            )
-            seen.add(league)
-        for code, name in COMPETITIONS:
-            if name not in seen:
-                options.append((f"{name}|{season}", f"{name}  [dim]{code}[/dim]", season))
+        for _, name in COMPETITIONS:
+            for season in sorted(stored.get(name, set()) | {current}):
+                options.append((f"{name}|{season}", f"{name}  [dim]{season}[/dim]", season))
         return options
 
     def action_pick_league(self) -> None:
