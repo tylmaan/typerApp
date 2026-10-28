@@ -140,13 +140,13 @@ def test_the_source_decides_which_matchday_to_fetch(
 def test_demo_data_cannot_collide_with_fetched_fixtures(
     repo: Repository, bus: EventBus, clock: Clock
 ) -> None:
-    seed_demo_data(repo)
+    seed_demo_data(repo, now=NOW)
     controller = TyperController(repo, bus, clock, FakeProvider({8: [fetched()]}, current=8))
     controller.set_league(*LEAGUE)
 
     controller.sync()
 
-    demo_days = repo.matchdays(DEMO_LEAGUE, "2026/27")
+    demo_days = repo.matchdays(DEMO_LEAGUE, season_for(NOW))
     assert [day.number for day in demo_days] == [12, 13]
     for day in demo_days:
         assert len(repo.matches(day.id)) == 5  # untouched by the sync
@@ -313,7 +313,7 @@ def test_the_overall_ranking_counts_the_active_league_only(
 ) -> None:
     # The demo league and a fetched one can sit in the database side by side; their points
     # must not be added together.
-    seed_demo_data(repo)
+    seed_demo_data(repo, now=NOW)
     provider = FakeProvider(
         {8: [fetched(status=MatchStatus.FINISHED, score=Score(2, 1))]}, current=8
     )
@@ -325,7 +325,7 @@ def test_the_overall_ranking_counts_the_active_league_only(
     demo_points = max(entry.points for entry in controller.ranking())
     assert demo_points == 0  # nobody predicted anything in the fetched league
 
-    controller.set_league(DEMO_LEAGUE, "2026/27")
+    controller.set_league(DEMO_LEAGUE, season_for(NOW))
     assert max(entry.points for entry in controller.ranking()) > 0
 
 
@@ -334,9 +334,9 @@ def test_a_source_only_syncs_the_leagues_it_covers(
 ) -> None:
     # The demo league has no fixtures in any API, so the app must not even try: the player
     # was getting an error they could do nothing about on every start.
-    seed_demo_data(repo)
+    seed_demo_data(repo, now=NOW)
     controller = TyperController(repo, bus, clock, FakeProvider())
-    controller.set_league(DEMO_LEAGUE, "2026/27")
+    controller.set_league(DEMO_LEAGUE, season_for(NOW))
     controller.provider.supports = lambda league: league != DEMO_LEAGUE  # type: ignore[method-assign]
 
     assert not controller.can_sync()

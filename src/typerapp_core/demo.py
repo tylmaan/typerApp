@@ -24,7 +24,6 @@ from typerapp_core.repository import (
 #: Deliberately not the name of a real competition: the demo must never share a matchday
 #: with fixtures fetched from the API, or the two sets of matches end up in one list.
 LEAGUE = "Premier League (demo)"
-SEASON = "2026/27"
 
 PLAYER_NAMES = ("Kuba", "Ala", "Bartek", "Celina", "Darek")
 
@@ -73,16 +72,19 @@ def seed_demo_data(
     seed: int = 2026,
 ) -> None:
     """Fill an empty database with two matchdays, five players and their predictions."""
+    from typerapp_core.controller import season_for
+
     now = now or utc_now()
+    season = season_for(now)
     rng = random.Random(seed)
 
     players = {name: repository.add_player(name) for name in PLAYER_NAMES}
 
     played = repository.upsert_matchday(
-        Matchday(league=LEAGUE, season=SEASON, number=PLAYED_MATCHDAY)
+        Matchday(league=LEAGUE, season=season, number=PLAYED_MATCHDAY)
     )
     open_matchday = repository.upsert_matchday(
-        Matchday(league=LEAGUE, season=SEASON, number=OPEN_MATCHDAY)
+        Matchday(league=LEAGUE, season=season, number=OPEN_MATCHDAY)
     )
 
     played_matches = repository.upsert_matches(
@@ -109,7 +111,7 @@ def seed_demo_data(
             _predict_matchday(repository, rng, player.id, open_matches, SKILL[name])  # type: ignore[arg-type]
 
     repository.set_setting(ACTIVE_LEAGUE, LEAGUE)
-    repository.set_setting(ACTIVE_SEASON, SEASON)
+    repository.set_setting(ACTIVE_SEASON, season)
     repository.set_setting(ACTIVE_PLAYER, players[PLAYER_NAMES[0]].id)
 
 
@@ -117,10 +119,14 @@ def remove_demo_data(repository: Repository) -> tuple[int, int]:
     """Delete the demo league and the players the seed created.
 
     Used once the real fixtures are in place and the sample data is only in the way. The
-    matchdays take their matches and predictions with them. Returns how many matchdays and
-    players were removed.
+    matchdays take their matches and predictions with them. Looks the demo up by league across
+    every season on record, since a demo seeded in an earlier season must still be removable
+    after the season has since rolled over. Returns how many matchdays and players were removed.
     """
-    matchdays = repository.matchdays(LEAGUE, SEASON)
+    seasons = [season for league, season in repository.leagues() if league == LEAGUE]
+    matchdays = [
+        matchday for season in seasons for matchday in repository.matchdays(LEAGUE, season)
+    ]
     for matchday in matchdays:
         repository.delete_matchday(matchday.id)  # type: ignore[arg-type]
 

@@ -14,11 +14,11 @@ from datetime import timedelta
 import pytest
 from textual.widgets import Label, ListItem, ListView
 
-from typerapp_core.controller import TyperController
+from typerapp_core.controller import TyperController, season_for
 from typerapp_core.demo import LEAGUE as DEMO_LEAGUE
 from typerapp_core.demo import OPEN_MATCHDAY, PLAYED_MATCHDAY, seed_demo_data
 from typerapp_core.events import EventBus
-from typerapp_core.models import MatchStatus, Score, ScoringRules
+from typerapp_core.models import MatchStatus, Score, ScoringRules, utc_now
 from typerapp_core.providers.base import ProviderUnavailable
 from typerapp_core.repository import Repository
 from typerapp_tui.app import TyperApp
@@ -41,6 +41,10 @@ def no_swallowed_errors(caplog: pytest.LogCaptureFixture):
     yield
     broken = [record for record in caplog.records if record.levelno >= logging.ERROR]
     assert not broken, broken[0].getMessage()
+
+
+#: The demo league's season, which tracks the real calendar like any other league's would.
+DEMO_SEASON = season_for(utc_now())
 
 
 def build(*, demo: bool = True, provider=None) -> tuple[Repository, TyperApp]:
@@ -891,7 +895,7 @@ def test_going_back_to_the_demo_league_is_possible() -> None:
             await pilot.press("enter")
             await pilot.pause()
 
-            assert app.controller.league() == (DEMO_LEAGUE, "2026/27")
+            assert app.controller.league() == (DEMO_LEAGUE, DEMO_SEASON)
         repository.close()
 
     run(scenario)
@@ -928,7 +932,7 @@ def test_removing_the_demo_leaves_other_leagues_alone() -> None:
             app.controller.set_league("Premier League", "2026/27")
             app.controller.sync()
             app.controller.add_player("Marek")
-            app.controller.set_league(DEMO_LEAGUE, "2026/27")
+            app.controller.set_league(DEMO_LEAGUE, DEMO_SEASON)
             await pilot.pause()
 
             await pilot.press("down", "down", "down", "enter")
@@ -963,7 +967,7 @@ def test_a_fetched_league_can_be_cleared_without_touching_the_players() -> None:
             await pilot.click("#yes")
             await pilot.pause()
 
-            assert app.controller.known_leagues() == [(DEMO_LEAGUE, "2026/27")]
+            assert app.controller.known_leagues() == [(DEMO_LEAGUE, DEMO_SEASON)]
             assert len(app.controller.players()) == 5  # the demo players are untouched
         repository.close()
 

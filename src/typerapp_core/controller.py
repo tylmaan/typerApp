@@ -573,9 +573,9 @@ class TyperController:
         self.events.publish(SettingsChanged(key=ACTIVE_LEAGUE, value=None))
 
     def has_demo_data(self) -> bool:
-        from typerapp_core.demo import LEAGUE, PLAYER_NAMES, SEASON
+        from typerapp_core.demo import LEAGUE, PLAYER_NAMES
 
-        if self.repository.matchdays(LEAGUE, SEASON):
+        if any(league == LEAGUE for league, _ in self.repository.leagues()):
             return True
         return any(player.name in PLAYER_NAMES for player in self.players())
 

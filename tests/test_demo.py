@@ -4,6 +4,7 @@ from collections.abc import Iterator
 
 import pytest
 
+from typerapp_core.controller import season_for
 from typerapp_core.demo import LEAGUE, OPEN_MATCHDAY, PLAYED_MATCHDAY, PLAYER_NAMES, seed_demo_data
 from typerapp_core.models import ScoringRules, utc_now
 from typerapp_core.ranking import build_ranking
@@ -19,7 +20,8 @@ def seeded() -> Iterator[Repository]:
 
 
 def matchday_matches(repository: Repository, number: int) -> list:
-    matchday = next(day for day in repository.matchdays(LEAGUE, "2026/27") if day.number == number)
+    season = season_for(utc_now())
+    matchday = next(day for day in repository.matchdays(LEAGUE, season) if day.number == number)
     return repository.matches(matchday.id)
 
 
