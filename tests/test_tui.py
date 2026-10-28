@@ -1047,6 +1047,15 @@ def test_the_demo_league_does_not_try_to_fetch_anything() -> None:
     run(scenario)
 
 
+async def wait_for_points(pilot, row: MatchRow, expected: int) -> None:
+    """Let a row count its points up, however long the machine takes over it."""
+    for _ in range(100):
+        if row.points == expected:
+            return
+        await pilot.pause(0.05)
+    raise AssertionError(f"the row stopped at {row.points} instead of {expected}")
+
+
 def test_points_count_up_when_a_result_lands() -> None:
     async def scenario() -> None:
         repository, app = build()
@@ -1063,16 +1072,15 @@ def test_points_count_up_when_a_result_lands() -> None:
             await pilot.press("2", ":", "1", "enter")
             await pilot.pause()
 
-            assert row.points == 7  # the row ends up showing what the prediction was worth
+            # The row ends up showing what the prediction was worth. It gets there by counting
+            # up on a timer, so wait for it: right after the result the number is still on its
+            # way, and how far it has got depends on how fast the machine is.
+            await wait_for_points(pilot, row, 7)
 
-            # The counting itself: it starts at zero and climbs there on a timer.
+            # The counting itself: it starts at zero and climbs there.
             row.award(7)
             assert row.points == 0
-            for _ in range(40):
-                await pilot.pause()
-                if row.points == 7:
-                    break
-            assert row.points == 7
+            await wait_for_points(pilot, row, 7)
         repository.close()
 
     run(scenario)
@@ -1980,6 +1988,53 @@ def test_the_red_goes_away_when_predictions_are_open_again() -> None:
 
             assert not countdown.has_class("-closed")
             assert "zamknięcie typowania za" in str(countdown.content)
+        repository.close()
+
+    run(scenario)
+
+
+def test_the_demo_has_no_sync_key_anywhere() -> None:
+    async def scenario() -> None:
+        repository, session = build_session()
+        app = TyperApp(session)
+        async with app.run_test() as pilot:
+            menu = app.screen
+            assert isinstance(menu, MainMenuScreen)
+            assert menu.check_action("sync", ()) is True  # your own data can be fetched
+
+            await choose(pilot, "demo")
+            assert menu.check_action("sync", ()) is False
+
+            await choose(pilot, "matchday")
+            assert isinstance(app.screen, MatchdayScreen)
+            assert app.screen.check_action("sync", ()) is False
+
+            await pilot.press("escape")
+            await pilot.pause()
+            await choose(pilot, "leave_demo")  # and the key is back
+            assert menu.check_action("sync", ()) is True
+        repository.close()
+
+    run(scenario)
+
+
+def test_pressing_s_in_the_demo_does_nothing() -> None:
+    async def scenario() -> None:
+        provider = FakeProvider()
+        repository, session = build_session()
+        session.real.provider = provider
+        app = TyperApp(session)
+        async with app.run_test() as pilot:
+            await choose(pilot, "demo")
+            provider.asked.clear()
+            before = notices(app)  # the toast about the demo being on is already there
+
+            await pilot.press("s")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+            assert provider.asked == []  # nothing was asked of the real source either
+            assert notices(app) == before  # and the key said nothing
         repository.close()
 
     run(scenario)

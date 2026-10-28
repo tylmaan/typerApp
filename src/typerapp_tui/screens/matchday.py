@@ -357,6 +357,8 @@ class MatchdayScreen(Screen[None]):
           the keyboard has to belong to the player whose predictions these are.
         """
         controller = self.controller
+        if action == "sync":
+            return not cast("TyperApp", self.app).demo  # the demo has no source to ask
         if action == "simulate":
             return cast("TyperApp", self.app).demo and not controller.is_finished(self.matchday_id)
         if action == "enter_result":

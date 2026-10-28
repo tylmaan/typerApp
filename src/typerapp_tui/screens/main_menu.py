@@ -270,6 +270,12 @@ class MainMenuScreen(Screen[None]):
     def action_sync(self) -> None:
         cast("TyperApp", self.app).sync_now()
 
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        """The demo is built in memory and no league of it exists anywhere to be fetched."""
+        if action == "sync":
+            return not self._demo
+        return True
+
     def action_quit(self) -> None:
         """Textual does not pass the binding's action up to the app, so it lives here."""
         self.app.exit()
